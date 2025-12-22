@@ -66,7 +66,7 @@ from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
-
+from utils import get_trainable_params
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.57.0")
@@ -495,6 +495,13 @@ def main():
             dtype=dtype,
         )
     else:
+        # NOTE: use len(tokenizer) instead of tokenizer.vocab_size because vocab_size does not account for special tokens
+        if len(tokenizer) != config.vocab_size:
+            logger.warning(
+                f"Tokenizer vocab size ({len(tokenizer)}) not equal to config vocab size ({config.vocab_size}). "
+                "Updating model vocab size"
+            )
+            config.vocab_size = len(tokenizer)
         model = AutoModelForCausalLM.from_config(config, trust_remote_code=model_args.trust_remote_code)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params / 2**20:.2f}M params")
@@ -645,6 +652,7 @@ def main():
             preds = preds[:, :-1].reshape(-1)
             return metric.compute(predictions=preds, references=labels)
 
+    get_trainable_params(model, verbose=True)
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
