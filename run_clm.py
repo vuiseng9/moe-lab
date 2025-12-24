@@ -60,7 +60,7 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
     is_torch_xla_available,
-    set_seed,
+    set_seed, OlmoeForCausalLM,
 )
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -79,6 +79,7 @@ logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
+from moe_trainer import MOETrainer
 
 @dataclass
 class ModelArguments:
@@ -654,7 +655,7 @@ def main():
 
     get_trainable_params(model, verbose=True)
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = MOETrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
