@@ -79,12 +79,7 @@ logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
-from moe_trainer import OlmoeTrainer, DSv3Trainer
-
-TRAINER_CLS = {
-    'olmoe': OlmoeTrainer,
-    'deepseek_v3': DSv3Trainer,
-}
+from moelab import MOELAB_TRAINER_CLS
 
 @dataclass
 class ModelArguments:
@@ -660,11 +655,13 @@ def main():
 
     get_trainable_params(model, verbose=True)
 
-    if model.config.model_type in TRAINER_CLS:
-        Trainer = TRAINER_CLS[model.config.model_type]
+    # Use specialized Moelab Trainer for certain model arch
+    TrainerCls = Trainer
+    if model.config.model_type in MOELAB_TRAINER_CLS:
+        TrainerCls = MOELAB_TRAINER_CLS[model.config.model_type]
 
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = TrainerCls(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,

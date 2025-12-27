@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moelab"
+version = "0.1.0"
+description = "MoE Ablations using HF with some customization (no forks, no monkey patch)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Chua Vui Seng" }]
+dependencies = [
+  "torch",
+  "transformers==4.57.3",
+  "datasets",
+  "accelerate",
+  "scikit-learn",
+  "evaluate",
+  "tabulate",
+  "humanize",
+  "wandb"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "ruff",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
