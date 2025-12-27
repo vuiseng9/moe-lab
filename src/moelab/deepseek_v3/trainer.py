@@ -7,7 +7,7 @@ from moelab.trainer import MoelabTrainer
 class DSv3Trainer(MoelabTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.router_outputs = []             # (layer_name, topk_indices) tuples
+        self.router_outputs = []  # (layer_name, topk_indices) tuples
         self.router_modules = OrderedDict()  # (layer_name,  bias_tensor) tuples
         self._hooks_registered = False
         self._hook_handles = []
@@ -15,7 +15,7 @@ class DSv3Trainer(MoelabTrainer):
 
     def _register_router_hooks_and_make_module_map(self):
         """
-        Register forward hooks on all DeepseekV3TopkRouter modules 
+        Register forward hooks on all DeepseekV3TopkRouter modules
         to capture routing decisions. and store mapping to bias tensors.
         """
         if self._hooks_registered:
@@ -32,6 +32,7 @@ class DSv3Trainer(MoelabTrainer):
                     def router_hook(mod, inp, output):
                         topk_indices, _ = output
                         self.router_outputs.append((layer_name, topk_indices.detach()))
+
                     return router_hook
 
                 handle = module.register_forward_hook(make_hook(name))
@@ -42,7 +43,6 @@ class DSv3Trainer(MoelabTrainer):
 
         self._hooks_registered = True
 
-
     def compute_loss(self, model, inputs, num_items_in_batch, return_outputs=False):
         # Register hooks on first call (lazy initialization)
         if not self._hooks_registered:
@@ -52,7 +52,8 @@ class DSv3Trainer(MoelabTrainer):
 
         # Call HF Trainer's compute_loss
         loss, outputs = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch)
+            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+        )
 
         routed_frac_per_k, load_per_expert = self._compute_tokens_per_expert()
 
@@ -68,13 +69,15 @@ class DSv3Trainer(MoelabTrainer):
                     K, E = routed_frac_per_k.shape
                     for k in range(K):
                         for e in range(E):
-                            log_dict[f"moe/top{k+1}/e{e}"] = float(routed_frac_per_k[k, e])
+                            log_dict[f"moe/top{k + 1}/e{e}"] = float(routed_frac_per_k[k, e])
 
                 # log only the first router's bias to avoid clutter
                 if self.router_modules:
                     bias = next(iter(self.router_modules.values())).e_score_correction_bias
                     bias_list = bias.detach().float().tolist()
-                    log_dict.update({f"moe/r0_e{e}_bias": float(bias_list[e]) for e in range(len(bias_list))})
+                    log_dict.update(
+                        {f"moe/r0_e{e}_bias": float(bias_list[e]) for e in range(len(bias_list))}
+                    )
 
                 self.wb_handler.log(log_dict)
 
@@ -104,7 +107,7 @@ class DSv3Trainer(MoelabTrainer):
             return None, None
 
         # Get config from model
-        model = self.model.module if hasattr(self.model, 'module') else self.model
+        model = self.model.module if hasattr(self.model, "module") else self.model
         n_experts = model.config.n_routed_experts
         top_k = model.config.num_experts_per_tok
 
@@ -115,7 +118,7 @@ class DSv3Trainer(MoelabTrainer):
         load_per_expert = OrderedDict()
         for router_name, topk_indices in self.router_outputs:
             tpe = torch.bincount(topk_indices.flatten(), minlength=n_experts).float()
-            load_per_expert[router_name] = tpe / tpe.mean() # normalized load per expert
+            load_per_expert[router_name] = tpe / tpe.mean()  # normalized load per expert
 
             # topk_indices shape: [num_tokens, top_k]
             for k in range(top_k):
@@ -125,10 +128,9 @@ class DSv3Trainer(MoelabTrainer):
 
         # Normalize to proportions per top-k slot
         row_sums = total_counts.sum(dim=1, keepdim=True)
-        routed_frac_per_k = total_counts / row_sums # routed fraction per top-k slot per expert
+        routed_frac_per_k = total_counts / row_sums  # routed fraction per top-k slot per expert
 
         return routed_frac_per_k, load_per_expert
-
 
     def __del__(self):
         """Clean up hooks when trainer is deleted."""

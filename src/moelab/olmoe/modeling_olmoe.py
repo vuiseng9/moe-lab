@@ -6,6 +6,7 @@ from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 import torch
 import warnings
 
+
 # NOTE: instead of another configuration_olmoe.py
 # we put MoelabOlmoeConfig here for brevity
 class MoelabOlmoeConfig(OlmoeConfig):
@@ -13,15 +14,18 @@ class MoelabOlmoeConfig(OlmoeConfig):
     keys_to_ignore_at_inference = ["past_key_values", "aux_loss", "router_logits"]
 
     def __init__(self, enable_lbloss: bool = False, **kwargs):
-        # Default output_router_logits to True 
+        # Default output_router_logits to True
         # since Moelab's OlmoeTrainer relies on it
         user_val = kwargs.pop("output_router_logits", None)
         if user_val is False:
-            warnings.warn("MoelabOlmoeConfig forces output_router_logits=True because MoelabOlmoeTrainer relies on it.")
+            warnings.warn(
+                "MoelabOlmoeConfig forces output_router_logits=True because MoelabOlmoeTrainer relies on it."
+            )
         super().__init__(output_router_logits=True, **kwargs)
         self.enable_lbloss = enable_lbloss
 
-# NOTE: we override the forward method to 
+
+# NOTE: we override the forward method to
 # customize the load balancing loss computation
 # original implementation compute aux loss when output_router_logits is True
 # we duplicate original implementation but force output_router_logits to be True in MoelabOlmoeConfig for MoelabOlmoeTrainer
@@ -69,12 +73,18 @@ class MoelabOlmoeForCausalLM(OlmoeForCausalLM):
         'Hey, are you conscious? Can you talk to me?\nI’m not sure if you’re conscious of this, but I’m'
         ```
         """
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
         output_router_logits = (
-            output_router_logits if output_router_logits is not None else self.config.output_router_logits
+            output_router_logits
+            if output_router_logits is not None
+            else self.config.output_router_logits
         )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -95,7 +105,9 @@ class MoelabOlmoeForCausalLM(OlmoeForCausalLM):
 
         hidden_states = outputs[0]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        slice_indices = (
+            slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        )
         logits = self.lm_head(hidden_states[:, slice_indices, :])
 
         loss = None
@@ -111,7 +123,9 @@ class MoelabOlmoeForCausalLM(OlmoeForCausalLM):
                 attention_mask,
             )
             if labels is not None:
-                loss += self.router_aux_loss_coef * aux_loss.to(loss.device)  # make sure to reside in the same device
+                loss += self.router_aux_loss_coef * aux_loss.to(
+                    loss.device
+                )  # make sure to reside in the same device
 
         if not return_dict:
             output = (logits,) + outputs[1:]

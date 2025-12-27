@@ -8,9 +8,7 @@ _REQUIRED = Version("4.57.3")
 _INSTALLED = Version(tfmr.__version__)
 
 if _INSTALLED != _REQUIRED:
-    raise RuntimeError(
-        f"moelab requires transformers=={_REQUIRED}, got {tfmr.__version__}"
-    )
+    raise RuntimeError(f"moelab requires transformers=={_REQUIRED}, got {tfmr.__version__}")
 
 
 from .olmoe.register import register_moelab_olmoe, MoelabOlmoeConfig
