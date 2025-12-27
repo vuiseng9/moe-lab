@@ -13,11 +13,15 @@ if _INSTALLED != _REQUIRED:
     )
 
 
+from .olmoe.register import register_moelab_olmoe, MoelabOlmoeConfig
+from .olmoe.trainer import OlmoeTrainer
 from .deepseek_v3.register import register_moelab_deepseek_v3, MoelabDeepseekV3Config
 from .deepseek_v3.trainer import DSv3Trainer
 
+register_moelab_olmoe()
 register_moelab_deepseek_v3()
 
 MOELAB_TRAINER_CLS = {
     MoelabDeepseekV3Config.model_type: DSv3Trainer,
+    MoelabOlmoeConfig.model_type: OlmoeTrainer,
 }
