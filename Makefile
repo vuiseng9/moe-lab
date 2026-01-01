@@ -16,7 +16,7 @@ ifeq ($(runlabel),)
 	$(error runlabel must be provided. Usage: make <target> runlabel=something)
 endif
 
-llama-dense-on-ts: check-postfix
+llama-dense: check-postfix
 	mkdir -p $(OUTROOT)/$(WANDB_PROJECT)/$@-$(postfix) && \
 	WANDB_PROJECT=$(WANDB_PROJECT) \
 	CUDA_VISIBLE_DEVICES=$(CUDADEV) python run_clm.py \
