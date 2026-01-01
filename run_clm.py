@@ -60,7 +60,7 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
     is_torch_xla_available,
-    set_seed
+    set_seed,
 )
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
@@ -71,7 +71,9 @@ from utils import get_trainable_params
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.57.0")
 
-require_version("datasets>=2.14.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
+require_version(
+    "datasets>=2.14.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +81,8 @@ logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
-from moe_trainer import OlmoeTrainer, DSv3Trainer
+from moelab import MOELAB_TRAINER_CLS
 
-TRAINER_CLS = {
-    'olmoe': OlmoeTrainer,
-    'deepseek_v3': DSv3Trainer,
-}
 
 @dataclass
 class ModelArguments:
@@ -102,7 +100,10 @@ class ModelArguments:
     )
     model_type: Optional[str] = field(
         default=None,
-        metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
+        metadata={
+            "help": "If training from scratch, pass a model type from the list: "
+            + ", ".join(MODEL_TYPES)
+        },
     )
     config_overrides: Optional[str] = field(
         default=None,
@@ -114,22 +115,30 @@ class ModelArguments:
         },
     )
     config_name: Optional[str] = field(
-        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
+        default=None,
+        metadata={"help": "Pretrained config name or path if not the same as model_name"},
     )
     tokenizer_name: Optional[str] = field(
-        default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
+        default=None,
+        metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"},
     )
     cache_dir: Optional[str] = field(
         default=None,
-        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
+        metadata={
+            "help": "Where do you want to store the pretrained models downloaded from huggingface.co"
+        },
     )
     use_fast_tokenizer: bool = field(
         default=True,
-        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
+        metadata={
+            "help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."
+        },
     )
     model_revision: str = field(
         default="main",
-        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+        metadata={
+            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
+        },
     )
     token: str = field(
         default=None,
@@ -162,7 +171,9 @@ class ModelArguments:
     )
 
     def __post_init__(self):
-        if self.config_overrides is not None and (self.config_name is not None or self.model_name_or_path is not None):
+        if self.config_overrides is not None and (
+            self.config_name is not None or self.model_name_or_path is not None
+        ):
             raise ValueError(
                 "--config_overrides can't be used in combination with --config_name or --model_name_or_path"
             )
@@ -175,15 +186,23 @@ class DataTrainingArguments:
     """
 
     dataset_name: Optional[str] = field(
-        default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
+        default=None,
+        metadata={"help": "The name of the dataset to use (via the datasets library)."},
     )
     dataset_config_name: Optional[str] = field(
-        default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
+        default=None,
+        metadata={
+            "help": "The configuration name of the dataset to use (via the datasets library)."
+        },
     )
-    train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a text file)."})
+    train_file: Optional[str] = field(
+        default=None, metadata={"help": "The input training data file (a text file)."}
+    )
     validation_file: Optional[str] = field(
         default=None,
-        metadata={"help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."},
+        metadata={
+            "help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."
+        },
     )
     max_train_samples: Optional[int] = field(
         default=None,
@@ -240,10 +259,14 @@ class DataTrainingArguments:
         else:
             if self.train_file is not None:
                 extension = self.train_file.split(".")[-1]
-                assert extension in ["csv", "json", "txt"], "`train_file` should be a csv, a json or a txt file."
+                assert extension in ["csv", "json", "txt"], (
+                    "`train_file` should be a csv, a json or a txt file."
+                )
             if self.validation_file is not None:
                 extension = self.validation_file.split(".")[-1]
-                assert extension in ["csv", "json", "txt"], "`validation_file` should be a csv, a json or a txt file."
+                assert extension in ["csv", "json", "txt"], (
+                    "`validation_file` should be a csv, a json or a txt file."
+                )
 
 
 def split_streaming_dataset(
@@ -277,7 +300,9 @@ def split_streaming_dataset(
                     yield example
 
     features = full_streaming_dataset.features
-    train_stream = IterableDataset.from_generator(split_generator, gen_kwargs={"is_train": True}, features=features)
+    train_stream = IterableDataset.from_generator(
+        split_generator, gen_kwargs={"is_train": True}, features=features
+    )
     validation_stream = IterableDataset.from_generator(
         split_generator, gen_kwargs={"is_train": False}, features=features
     )
@@ -294,7 +319,9 @@ def main():
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args = parser.parse_json_file(
+            json_file=os.path.abspath(sys.argv[1])
+        )
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
@@ -325,7 +352,11 @@ def main():
 
     # Detecting last checkpoint.
     last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
+    if (
+        os.path.isdir(training_args.output_dir)
+        and training_args.do_train
+        and not training_args.overwrite_output_dir
+    ):
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
         if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
             raise ValueError(
@@ -371,7 +402,9 @@ def main():
                     streaming=data_args.streaming,
                     trust_remote_code=model_args.trust_remote_code,
                 )
-                raw_datasets = split_streaming_dataset(dataset_stream, data_args.validation_split_percentage)
+                raw_datasets = split_streaming_dataset(
+                    dataset_stream, data_args.validation_split_percentage
+                )
             else:
                 raw_datasets["validation"] = load_dataset(
                     data_args.dataset_name,
@@ -424,7 +457,9 @@ def main():
                     token=model_args.token,
                     **dataset_args,
                 )
-                raw_datasets = split_streaming_dataset(dataset_stream, data_args.validation_split_percentage)
+                raw_datasets = split_streaming_dataset(
+                    dataset_stream, data_args.validation_split_percentage
+                )
             else:
                 raw_datasets["validation"] = load_dataset(
                     extension,
@@ -489,7 +524,11 @@ def main():
         )
 
     if model_args.model_name_or_path:
-        dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+        dtype = (
+            model_args.dtype
+            if model_args.dtype in ["auto", None]
+            else getattr(torch, model_args.dtype)
+        )
         model = AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -508,7 +547,9 @@ def main():
                 "Updating model vocab size"
             )
             config.vocab_size = len(tokenizer)
-        model = AutoModelForCausalLM.from_config(config, trust_remote_code=model_args.trust_remote_code)
+        model = AutoModelForCausalLM.from_config(
+            config, trust_remote_code=model_args.trust_remote_code
+        )
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params / 2**20:.2f}M params")
 
@@ -660,11 +701,13 @@ def main():
 
     get_trainable_params(model, verbose=True)
 
-    if model.config.model_type in TRAINER_CLS:
-        Trainer = TRAINER_CLS[model.config.model_type]
+    # Use specialized Moelab Trainer for certain model arch
+    TrainerCls = Trainer
+    if model.config.model_type in MOELAB_TRAINER_CLS:
+        TrainerCls = MOELAB_TRAINER_CLS[model.config.model_type]
 
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = TrainerCls(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -672,7 +715,9 @@ def main():
         processing_class=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
-        compute_metrics=compute_metrics if training_args.do_eval and not is_torch_xla_available() else None,
+        compute_metrics=compute_metrics
+        if training_args.do_eval and not is_torch_xla_available()
+        else None,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics
         if training_args.do_eval and not is_torch_xla_available()
         else None,
@@ -691,7 +736,9 @@ def main():
         metrics = train_result.metrics
 
         max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+            data_args.max_train_samples
+            if data_args.max_train_samples is not None
+            else len(train_dataset)
         )
         if data_args.streaming:
             metrics["train_samples"] = max_train_samples
@@ -708,7 +755,11 @@ def main():
 
         metrics = trainer.evaluate()
 
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+        max_eval_samples = (
+            data_args.max_eval_samples
+            if data_args.max_eval_samples is not None
+            else len(eval_dataset)
+        )
         if data_args.streaming:
             metrics["eval_samples"] = max_eval_samples
         else:
