@@ -19,7 +19,8 @@ dependencies = [
   "evaluate",
   "tabulate",
   "humanize",
-  "wandb"
+  "wandb",
+  "neo-clm @ git+https://github.com/vuiseng9/neo-clm.git",
 ]
 
 [project.optional-dependencies]
