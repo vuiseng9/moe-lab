@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from transformers.models.olmoe.modeling_olmoe import OlmoeSparseMoeBlock
-from moe import MoE
+from moe_v0 import MoE
 import torch
 
 D = 128 # token dimension (model dimension)
@@ -61,5 +61,7 @@ with torch.no_grad():
     one_of_olmoe = olmoe.experts[eid](x)
     one_of_ours = ours.experts[eid](x)
     assert torch.allclose(one_of_olmoe, one_of_ours, atol=1e-6)
+
+    assert torch.allclose(out_olmoe, out_ours, atol=1e-6)
 
 print("end.")
