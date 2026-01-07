@@ -17,7 +17,7 @@ postfix ?= r0
 # 	 can be used to distinguish different runs, default r0.
 
 ifeq ($(sweep_lr),1)
-	extra_args += --sweep_lr 1e-3,3e-3,5e-3,8e-3,1e-4,3e-4,5e-4,8e-4,1e-5,3e-5,5e-5,8e-5 --sweep_lr_steps 150 --warmup_steps 30
+extra_args += --sweep_lr 1e-3,3e-3,5e-3,8e-3,1e-4,3e-4,5e-4,8e-4,1e-5,3e-5,5e-5,8e-5 --sweep_lr_steps 150 --warmup_steps 30
 endif
 
 __pretrain-tinystories:
@@ -54,6 +54,18 @@ olmoe_no_lb:
 
 olmoe_lb_penalty:
 	$(MAKE) _olmoe-ts runlabel=$@-$(postfix) enable_lb=true lr=1e-3
+
+_olmoe-ts-mixture-resolution:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moelab_olmoe \
+		--config_overrides num_experts=$(E),num_experts_per_tok=$(K),intermediate_size=$(Dff),num_hidden_layers=8,hidden_size=256,num_attention_heads=8,num_key_value_heads=8,enable_lbloss=true \
+		--tokenizer_name allenai/OLMoE-1B-7B-0125"
+
+olmoe-e32-k4:
+	$(MAKE) _olmoe-ts-mixture-resolution runlabel=$@-$(postfix) E=32 K=4 Dff=32 lr=1e-3
+
+olmoe-e64-k8:
+	$(MAKE) _olmoe-ts-mixture-resolution runlabel=$@-$(postfix) E=64 K=8 Dff=16 lr=1e-3
 
 dsv3_no_lb:
 	$(MAKE) _deepseekv3-ts runlabel=$@-$(postfix) gamma=0.0 lr=8e-4
