@@ -13,10 +13,13 @@ postfix ?= r0
 # 	 User-set variables override everything in the chain.
 # 2. add sweep_lr=1 to enable learning rate sweep. 
 # 	 corresponding extra_args automatically appended. 
+# 	 a seperated wandb project is expected for sweep runs
+# 	 to avoid many runs in the main project.
 # 3. postfix=<text> make run will additional label, 
 # 	 can be used to distinguish different runs, default r0.
 
 ifeq ($(sweep_lr),1)
+WANDB_PROJECT := $(WANDB_PROJECT)-sweeplr
 extra_args += --sweep_lr 1e-3,3e-3,5e-3,8e-3,1e-4,3e-4,5e-4,8e-4,1e-5,3e-5,5e-5,8e-5 --sweep_lr_steps 150 --warmup_steps 30
 endif
 
@@ -60,6 +63,9 @@ _olmoe-ts-mixture-resolution:
 	model_cfg="--model_type moelab_olmoe \
 		--config_overrides num_experts=$(E),num_experts_per_tok=$(K),intermediate_size=$(Dff),num_hidden_layers=8,hidden_size=256,num_attention_heads=8,num_key_value_heads=8,enable_lbloss=true \
 		--tokenizer_name allenai/OLMoE-1B-7B-0125"
+
+olmoe-e16-k2:
+	$(MAKE) _olmoe-ts-mixture-resolution runlabel=$@-$(postfix) E=16 K=2 Dff=64 lr=1e-3
 
 olmoe-e32-k4:
 	$(MAKE) _olmoe-ts-mixture-resolution runlabel=$@-$(postfix) E=32 K=4 Dff=32 lr=1e-3
