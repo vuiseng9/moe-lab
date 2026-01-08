@@ -51,43 +51,42 @@ class MoE(nn.Module):
         # NOTE: just for testing to compare against olmoe; to be removed 
         # # typically, the normalization is post top-k selection 
         # per olmoe, just for testing against olmoe version
-        router_logits = router_logits.softmax(dim=-1) 
+        router_scores = router_logits.softmax(dim=-1) 
         
         # # Top-K expert selection 
-        k_logits, k_ids = router_logits.topk(K, dim=-1) 
+        k_scores, k_ids = router_scores.topk(K, dim=-1) 
         # element value of k_logits is the logits score 
         # element value of k_ids is in [0, E-1], the eid 
-        
-        # initialize output buffer, per token, per k slot, output dimension 
-        expert_outputs = torch.zeros(T, K, D, device=x.device, dtype=x.dtype) 
+
+        # renormalize per K elemnts. 
+        k_weights = k_scores / ( k_scores.sum(dim=-1, keepdim=True) + eps ) 
+
+        # in some MoE, the k_logits are only softmax-normalized here.
+        # unsqueeze for broadcast-friendly. 
+        # k_weights = k_logits.softmax(dim=-1).unsqueeze(-1) # (T, K) -> (T, K, 1) 
+
+        # initialize output buffer, per token, output dimension
+        # accumulate per k slot (save buffer space by accumulating directly)
+        moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
         
         # loop over experts, 
-        # get assigned tokens, 
+        # get assigned tokens, get the corresponding weights
         # forward pass, 
-        # write to right token, 
-        # k slot in expert_outputs 
+        # accumulate to right token in expert_outputs
         for eid in range(E): 
             # tok_ids: indices of tokens to be attended by expert eid 
             # # which_k: for each token, which k slot it is from 0 to K 
             tok_ids, which_k = torch.where(k_ids == eid) 
             
-            # RHS: (1) get the expert module, (2) gather the tokens, (3) forward pass 
             # LHS: write to the right token id, k slot in expert_outputs 
-            expert_outputs[tok_ids, which_k, :] = self.experts[eid](_x[tok_ids]) 
+            # RHS: (1) get the expert module, (2) gather the tokens, (3) forward pass , 
+            #      (4) multiply weights (5) accumulate
+            expert = self.experts[eid]
+            tokens = _x[tok_ids]  
+            weights = k_weights[tok_ids, which_k].unsqueeze(-1)
             
-        # NOTE: just for testing against olmoe version, 
-        # k_logits was softmaxed above which means normalized by E elements 
-        # # need to renormalize per K elemnts. 
-        k_weights = k_logits / ( k_logits.sum(dim=-1, keepdim=True) + eps ) 
-        k_weights = k_weights.unsqueeze(-1) # (T, K) -> (T, K, 1) 
-        
-        # in standard MoE, the k_logits here are raw logits from router. 
-        # then we would just softmax-normalized per k directly. 
-        # and unsqueeze for broadcast-friendly. 
-        # k_weights = k_logits.softmax(dim=-1).unsqueeze(-1) # (T, K) -> (T, K, 1) 
+            moe_outputs[tok_ids, :] += expert(tokens) * weights 
 
-        # weighted sum over K experts (weights are broadcasted) 
-        moe_outputs = (expert_outputs * k_weights).sum(dim=-2) # reduce by K dim 
         return moe_outputs.reshape(B, L, D)
 
 
