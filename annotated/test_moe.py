@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from transformers.models.olmoe.modeling_olmoe import OlmoeSparseMoeBlock
-from moe_v1 import MoE
+from moe import MoE
 import torch
 
 D = 128 # token dimension (model dimension)
@@ -14,7 +14,8 @@ K = 8  # number of experts to select (activated), also the top-k value
 # expert 
 DFF = D*4 # expert dimension
 
-CF = -1
+CF = 99
+
 @dataclass
 class MoeConfig:
     num_experts: int = E
@@ -30,7 +31,7 @@ cfg = MoeConfig()
 
 olmoe = OlmoeSparseMoeBlock(cfg)
 
-ours = MoE(D, E, K, DFF, bias=False)
+ours = MoE(D, E, K, DFF, CF, bias=False)
 
 B = 64  # batch size
 L = 256 # sequence length, # of tokens per sequence
@@ -64,10 +65,9 @@ with torch.no_grad():
     one_of_ours = ours.experts[eid](x)
     assert torch.allclose(one_of_olmoe, one_of_ours, atol=1e-6)
 
-    assert torch.allclose(out_olmoe, out_ours, atol=1e-6)
-    # if ours.n_drop > 0:
-    #     print(f"Total dropped tokens in ours: {ours.n_drop}")
-    # else:
-    #     assert torch.allclose(out_olmoe, out_ours, atol=1e-6)
+    if ours.n_drop > 0:
+        print(f"Total dropped tokens in ours: {ours.n_drop}")
+    else:
+        assert torch.allclose(out_olmoe, out_ours, atol=1e-6)
 
 print("end.")
