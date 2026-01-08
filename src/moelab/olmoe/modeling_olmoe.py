@@ -12,6 +12,7 @@ import warnings
 class MoelabOlmoeConfig(OlmoeConfig):
     model_type = "moelab_olmoe"
     keys_to_ignore_at_inference = ["past_key_values", "aux_loss", "router_logits"]
+    capacity_factor: float = -1.0  # default capacity factor
 
     def __init__(self, enable_lbloss: bool = False, **kwargs):
         # Default output_router_logits to True
@@ -33,6 +34,21 @@ class MoelabOlmoeConfig(OlmoeConfig):
 class MoelabOlmoeForCausalLM(OlmoeForCausalLM):
     config_class = MoelabOlmoeConfig
 
+    def post_init(self):
+        super().post_init()
+        self.monkey_patch()
+    
+    def monkey_patch(self):
+        # append config to OlmoeSparseMoeBlock
+        for blk in self.model.layers:
+            moe = blk.mlp
+            moe.capacity_factor = self.config.capacity_factor
+            moe.n_drop = 0
+
+        # monkey patch OlmoeSparseMoeBlock forward to token_dropping_forward
+        MoeClass = type(moe)
+        MoeClass.forward = token_dropping_forward
+        
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -142,3 +158,55 @@ class MoelabOlmoeForCausalLM(OlmoeForCausalLM):
             attentions=outputs.attentions,
             router_logits=outputs.router_logits,
         )
+
+
+def token_dropping_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    batch_size, sequence_length, hidden_dim = hidden_states.shape
+    hidden_states = hidden_states.view(-1, hidden_dim)
+    # router_logits: (batch * sequence_length, n_experts)
+    router_logits = self.gate(hidden_states)
+
+    routing_scores = torch.nn.functional.softmax(router_logits, dim=1, dtype=torch.float)
+    routing_weights, selected_experts = torch.topk(routing_scores, self.top_k, dim=-1)
+    if self.norm_topk_prob:
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+    # we cast back to the input dtype
+    routing_weights = routing_weights.to(hidden_states.dtype)
+
+    final_hidden_states = torch.zeros(
+        (batch_size * sequence_length, hidden_dim), dtype=hidden_states.dtype, device=hidden_states.device
+    )
+
+    self.n_drop = 0
+    expert_capacity = int(
+        batch_size * sequence_length * self.top_k * self.capacity_factor / self.num_experts ) if self.capacity_factor > 0 else None
+    
+    # Loop over all available experts in the model and perform the computation on each expert
+    for expert_idx in range(self.num_experts):
+        tok_ids, which_k = torch.where(selected_experts == expert_idx) 
+
+        if expert_capacity and tok_ids.numel() > expert_capacity:
+            _, keep_i = torch.topk(routing_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+
+            keep_tok_ids = tok_ids[keep_i]
+            keep_which_k = which_k[keep_i]
+
+            expert = self.experts[expert_idx]
+            tokens = hidden_states[keep_tok_ids]
+            weights = routing_weights[keep_tok_ids, keep_which_k].unsqueeze(-1)
+
+            final_hidden_states[keep_tok_ids, :] += expert(tokens) * weights
+
+            n_drop = tok_ids.numel() - expert_capacity
+            if n_drop > 0:
+                # print(f"Expert {expert_idx} drops {n_drop} tokens. (limit: {expert_capacity})")
+                self.n_drop += n_drop
+        else:
+            expert = self.experts[expert_idx]
+            tokens = hidden_states[tok_ids]
+            weights = routing_weights[tok_ids, which_k].unsqueeze(-1)
+
+            final_hidden_states[tok_ids, :] += expert(tokens) * weights
+
+    final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+    return final_hidden_states, router_logits

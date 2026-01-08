@@ -21,6 +21,23 @@ class OlmoeTrainer(MoelabTrainer):
                 for e in range(routed_frac_per_k.shape[1])
             }
 
+            if model.config.capacity_factor > 0:
+                # n_drop is total dropped tokens of a MoE layer, ie. dropped tokens of all experts in that layer
+                global_n_drop = 0 # per model previous forward
+                for blk in model.model.layers:
+                    global_n_drop += blk.mlp.n_drop
+                
+                global_n_experts = model.config.num_experts * model.config.num_hidden_layers
+                n_drop_per_e = global_n_drop / global_n_experts
+
+                global_n_routed = num_items_in_batch * model.config.num_hidden_layers * model.config.num_experts_per_tok
+
+                drop_ratio = global_n_drop / global_n_routed
+
+                log_dict.update({
+                    f"train/avg_drop_per_e": n_drop_per_e,
+                    f"train/drop_ratio": drop_ratio})
+
             if getattr(self.model.config, "enable_lbloss", False):
                 lbloss = outputs.aux_loss.detach().item()
                 log_dict.update({f"train/moe_lbloss": lbloss})
