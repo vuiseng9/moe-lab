@@ -13,21 +13,18 @@ class GluMLP(nn.Module):
         return self.down(self.act(self.gate(x)) * self.up(x))
     
 class MoE(nn.Module):
-    def __init__(self, D, E, K, DFF, CF=-1, bias=False):
+    def __init__(self, D, E, K, DFF, bias=False):
         super(MoE, self).__init__()
         self.D = D       # token dimension (model dimension)       
         self.E = E       # number of experts
         self.K = K       # number of activated experts per token
         self.DFF = DFF   # expert dimension (feed-forward dimension)
-        self.CF = CF     # capacity factor (disable if <= 0)
-
+        
         # router (gating network)
         self.router = nn.Linear(D, E, bias=bias)
         
         # experts
         self.experts = nn.ModuleList([GluMLP(D, DFF, bias=bias) for _ in range(E)])
-
-        self.n_drop = 0  # dropped tokens in previous forward pass
 
     def extra_repr(self):
         return f"[K:E] = {self.K}:{self.E} , K activated out of E experts per token"
@@ -44,11 +41,7 @@ class MoE(nn.Module):
         B, L, D = x.size() 
         T = B * L 
         K = self.K 
-        E = self.E
-
-        # capacity per expert (not per k-slot)
-        expert_capacity = int( (T*K/E) * self.CF ) if self.CF > 0 else None
-        self.n_drop = 0 
+        E = self.E 
         
         _x = x.view(T, D) # all tokens in a single list (dimension) 
         
@@ -71,32 +64,16 @@ class MoE(nn.Module):
         # loop over experts, 
         # get assigned tokens, 
         # forward pass, 
-        # write to right token, k slot in expert_outputs 
+        # write to right token, 
+        # k slot in expert_outputs 
         for eid in range(E): 
             # tok_ids: indices of tokens to be attended by expert eid 
             # # which_k: for each token, which k slot it is from 0 to K 
             tok_ids, which_k = torch.where(k_ids == eid) 
             
-            if expert_capacity and  tok_ids.numel() > expert_capacity:
-                # sorted=False is critical because if keep_i is sorted,
-                # then tok_ids[keep_i] and which_k[keep_i] are not preserving original order
-                # that will need another layer of mapping to restore order.
-                _, keep_i = torch.topk(k_logits[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
-
-                keep_tok_ids = tok_ids[keep_i]
-                keep_which_k = which_k[keep_i]
-
-                expert_outputs[keep_tok_ids, keep_which_k, :] = self.experts[eid](_x[keep_tok_ids]) 
-
-                n_drop = tok_ids.numel() - expert_capacity
-                if n_drop > 0:
-                    print(f"Expert {eid} drops {n_drop} tokens. (limit: {expert_capacity})")
-                    self.n_drop += n_drop
-                    
-            else:
-                # RHS: (1) get the expert module, (2) gather the tokens, (3) forward pass 
-                # LHS: write to the right token id, k slot in expert_outputs 
-                expert_outputs[tok_ids, which_k, :] = self.experts[eid](_x[tok_ids]) 
+            # RHS: (1) get the expert module, (2) gather the tokens, (3) forward pass 
+            # LHS: write to the right token id, k slot in expert_outputs 
+            expert_outputs[tok_ids, which_k, :] = self.experts[eid](_x[tok_ids]) 
             
         # NOTE: just for testing against olmoe version, 
         # k_logits was softmaxed above which means normalized by E elements 
@@ -128,7 +105,7 @@ if __name__ == "__main__":
     # expert 
     DFF = D*4 # expert dimension
 
-    moe_layer = MoE(D, E, K, DFF, CF=99)
+    moe_layer = MoE(D, E, K, DFF)
 
     print(moe_layer)
     # a batch of input sequences
