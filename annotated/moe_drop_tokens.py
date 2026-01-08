@@ -13,18 +13,21 @@ class GluMLP(nn.Module):
         return self.down(self.act(self.gate(x)) * self.up(x))
     
 class MoE(nn.Module):
-    def __init__(self, D, E, K, DFF, bias=False):
+    def __init__(self, D, E, K, DFF, CF=-1, bias=False):
         super(MoE, self).__init__()
         self.D = D       # token dimension (model dimension)       
         self.E = E       # number of experts
         self.K = K       # number of activated experts per token
         self.DFF = DFF   # expert dimension (feed-forward dimension)
-        
+        self.CF = CF     # capacity factor (disable if <= 0)
+
         # router (gating network)
         self.router = nn.Linear(D, E, bias=bias)
         
         # experts
         self.experts = nn.ModuleList([GluMLP(D, DFF, bias=bias) for _ in range(E)])
+
+        self.n_drop = 0  # dropped tokens in previous forward pass
 
     def extra_repr(self):
         return f"[K:E] = {self.K}:{self.E} , K activated out of E experts per token"
@@ -41,7 +44,11 @@ class MoE(nn.Module):
         B, L, D = x.size() 
         T = B * L 
         K = self.K 
-        E = self.E 
+        E = self.E
+
+        # capacity per expert (not per k-slot)
+        expert_capacity = int( (T*K/E) * self.CF ) if self.CF > 0 else None
+        self.n_drop = 0 
         
         _x = x.view(T, D) # all tokens in a single list (dimension) 
         
@@ -54,16 +61,12 @@ class MoE(nn.Module):
         router_scores = router_logits.softmax(dim=-1) 
         
         # # Top-K expert selection 
-        k_scores, k_ids = router_scores.topk(K, dim=-1) 
-        # element value of k_logits is the logits score 
+        k_weights, k_ids = router_scores.topk(K, dim=-1) 
+        # element value of k_weights is the logits score 
         # element value of k_ids is in [0, E-1], the eid 
 
         # renormalize per K elemnts. 
-        k_weights = k_scores / ( k_scores.sum(dim=-1, keepdim=True) + eps ) 
-
-        # in some MoE, the k_logits are only softmax-normalized here.
-        # unsqueeze for broadcast-friendly. 
-        # k_weights = k_logits.softmax(dim=-1).unsqueeze(-1) # (T, K) -> (T, K, 1) 
+        k_weights = k_weights / ( k_weights.sum(dim=-1, keepdim=True) + eps ) 
 
         # initialize output buffer, per token, output dimension
         # accumulate per k slot (save buffer space by accumulating directly)
@@ -78,14 +81,35 @@ class MoE(nn.Module):
             # # which_k: for each token, which k slot it is from 0 to K 
             tok_ids, which_k = torch.where(k_ids == eid) 
             
-            # LHS: write to the right token id, k slot in expert_outputs 
-            # RHS: (1) get the expert module, (2) gather the tokens, (3) forward pass , 
-            #      (4) multiply weights (5) accumulate
-            expert = self.experts[eid]
-            tokens = _x[tok_ids]  
-            weights = k_weights[tok_ids, which_k].unsqueeze(-1)
-            
-            moe_outputs[tok_ids, :] += expert(tokens) * weights 
+            if expert_capacity and tok_ids.numel() > expert_capacity:
+                # sorted=False is critical because if keep_i is sorted,
+                # then tok_ids[keep_i] and which_k[keep_i] are not preserving original order
+                # that will need another layer of mapping to restore order.
+                _, keep_i = torch.topk(router_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+
+                keep_tok_ids = tok_ids[keep_i]
+                keep_which_k = which_k[keep_i]
+
+                expert = self.experts[eid]
+                tokens = _x[keep_tok_ids]
+                weights = k_weights[keep_tok_ids, keep_which_k].unsqueeze(-1) 
+
+                moe_outputs[keep_tok_ids, :] += expert(tokens) * weights 
+
+                n_drop = tok_ids.numel() - expert_capacity
+                if n_drop > 0:
+                    print(f"Expert {eid} drops {n_drop} tokens. (limit: {expert_capacity})")
+                    self.n_drop += n_drop
+
+            else:
+                # LHS: write to the right token id, k slot in expert_outputs 
+                # RHS: (1) get the expert module, (2) gather the tokens, (3) forward pass , 
+                #      (4) multiply weights (5) accumulate
+                expert = self.experts[eid]
+                tokens = _x[tok_ids]  
+                weights = k_weights[tok_ids, which_k].unsqueeze(-1)
+                
+                moe_outputs[tok_ids, :] += expert(tokens) * weights 
 
         return moe_outputs.reshape(B, L, D)
 
@@ -104,7 +128,7 @@ if __name__ == "__main__":
     # expert 
     DFF = D*4 # expert dimension
 
-    moe_layer = MoE(D, E, K, DFF)
+    moe_layer = MoE(D, E, K, DFF, CF=-1)
 
     print(moe_layer)
     # a batch of input sequences
