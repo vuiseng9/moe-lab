@@ -125,20 +125,20 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
-# Copied from transformers.models.llama.modeling_llama.LlamaMLP with Llama->Moedl
+# Modified from transformers.models.llama.modeling_llama.LlamaMLP with Llama->Moedl
 class MoedlMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
-        self.act_fn = ACT2FN[config.hidden_act]
+        self.gate = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.up = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.down = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
+        self.act = ACT2FN[config.hidden_act]
 
     def forward(self, x):
-        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        down_proj = self.down(self.act(self.gate(x)) * self.up(x))
         return down_proj
 
 
@@ -181,7 +181,7 @@ def eager_attention_forward(
     return attn_output, attn_weights
 
 
-# Copied from transformers.models.llama.modeling_llama.LlamaAttention with Llama->Moedl
+# Modified from transformers.models.llama.modeling_llama.LlamaAttention with Llama->Moedl
 class MoedlAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -195,16 +195,16 @@ class MoedlAttention(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
 
-        self.q_proj = nn.Linear(
+        self.q = nn.Linear(
             config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias
         )
-        self.k_proj = nn.Linear(
+        self.k = nn.Linear(
             config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
         )
-        self.v_proj = nn.Linear(
+        self.v = nn.Linear(
             config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
         )
-        self.o_proj = nn.Linear(
+        self.o = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
         )
 
@@ -221,9 +221,9 @@ class MoedlAttention(nn.Module):
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
-        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_states = self.q(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_states = self.k(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_states = self.v(hidden_states).view(hidden_shape).transpose(1, 2)
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -249,7 +249,7 @@ class MoedlAttention(nn.Module):
         )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = self.o_proj(attn_output)
+        attn_output = self.o(attn_output)
         return attn_output, attn_weights
 
 # Copied from transformers.models.llama.modeling_olmoe.OlmoeFlashAttention2 with Olmoe->Moedl
@@ -466,21 +466,21 @@ class MoedlSdpaAttention(MoedlAttention):
 
 MOEDL_ATTENTION_CLASSES = {
     "eager": MoedlAttention,
-    "flash_attention_2": MoedlFlashAttention2,
-    "sdpa": MoedlSdpaAttention,
+    # "flash_attention_2": MoedlFlashAttention2,
+    # "sdpa": MoedlSdpaAttention,
 }
 
-# Copied from transformers.models.llama.modeling_llama.LlamaDecoderLayer with Llama->Moedl
+# Modified from transformers.models.llama.modeling_llama.LlamaDecoderLayer with Llama->Moedl
 class MoedlDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config: MoedlConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_attn = MoedlAttention(config=config, layer_idx=layer_idx)
+        self.norm_attn = MoedlRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.attn = MoedlAttention(config=config, layer_idx=layer_idx)
 
+        self.norm_mlp = MoedlRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = MoedlMLP(config)
-        self.input_layernorm = MoedlRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = MoedlRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     @deprecate_kwarg("past_key_value", new_name="past_key_values", version="4.58")
     def forward(
@@ -495,9 +495,9 @@ class MoedlDecoderLayer(GradientCheckpointingLayer):
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.Tensor:
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = self.norm_attn(hidden_states)
         # Self Attention
-        hidden_states, _ = self.self_attn(
+        hidden_states, _ = self.attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -511,7 +511,7 @@ class MoedlDecoderLayer(GradientCheckpointingLayer):
 
         # Fully Connected
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.norm_mlp(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
         return hidden_states
@@ -536,7 +536,7 @@ class MoedlPreTrainedModel(PreTrainedModel):
     }
 
 # Copied from transformers.models.llama.modeling_llama.LlamaModel with Llama->Moedl
-class MoedlModel(MoedlPreTrainedModel):
+class Moedl(MoedlPreTrainedModel):
     def __init__(self, config: MoedlConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
@@ -621,7 +621,7 @@ class MoedlForCausalLM(MoedlPreTrainedModel, GenerationMixin):
 
     def __init__(self, config):
         super().__init__(config)
-        self.model = MoedlModel(config)
+        self.model = Moedl(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -688,4 +688,4 @@ class MoedlForCausalLM(MoedlPreTrainedModel, GenerationMixin):
         )
     
 
-__all__ = ["MoedlForCausalLM", "MoedlModel", "MoedlPreTrainedModel"]
+__all__ = ["MoedlForCausalLM", "Moedl", "MoedlPreTrainedModel"]

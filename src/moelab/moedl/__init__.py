@@ -1,4 +1,4 @@
 from .configuration_moedl import MoedlConfig
-from .modeling_moedl import MoedlModel, MoedlForCausalLM
+from .modeling_moedl import Moedl, MoedlForCausalLM
 
-__all__ = ["MoedlConfig", "MoedlModel", "MoedlForCausalLM"]
+__all__ = ["MoedlConfig", "Moedl", "MoedlForCausalLM"]

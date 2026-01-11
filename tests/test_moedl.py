@@ -11,8 +11,42 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoConfig
 
-from moelab.moedl import MoedlConfig, MoedlForCausalLM, MoedlModel
+from moelab.moedl import MoedlConfig, MoedlForCausalLM, Moedl
 
+def llama_to_moedl_key_map(llama_key: str) -> str:
+    """Map Llama state dict keys to Moedl keys.
+    
+    Handles the attribute renaming in Moedl:
+    - Attention: q_proj→q, k_proj→k, v_proj→v, o_proj→o
+    - MLP: gate_proj→gate, up_proj→up, down_proj→down
+    - Decoder: input_layernorm→norm_attn, post_attention_layernorm→norm_mlp, self_attn→attn
+    """
+    # Attention projections
+    llama_key = llama_key.replace('.q_proj.', '.q.')
+    llama_key = llama_key.replace('.k_proj.', '.k.')
+    llama_key = llama_key.replace('.v_proj.', '.v.')
+    llama_key = llama_key.replace('.o_proj.', '.o.')
+    
+    # MLP projections
+    llama_key = llama_key.replace('.gate_proj.', '.gate.')
+    llama_key = llama_key.replace('.up_proj.', '.up.')
+    llama_key = llama_key.replace('.down_proj.', '.down.')
+    
+    # Layer norms and attention
+    llama_key = llama_key.replace('.input_layernorm.', '.norm_attn.')
+    llama_key = llama_key.replace('.post_attention_layernorm.', '.norm_mlp.')
+    llama_key = llama_key.replace('.self_attn.', '.attn.')
+    
+    return llama_key
+
+
+def convert_llama_state_dict_to_moedl(llama_state_dict: dict) -> dict:
+    """Convert a Llama state dict to Moedl format."""
+    moedl_state_dict = {}
+    for key, value in llama_state_dict.items():
+        moedl_key = llama_to_moedl_key_map(key)
+        moedl_state_dict[moedl_key] = value
+    return moedl_state_dict
 
 class TestMoedlConstructor:
     """Test model construction with various configurations."""
@@ -49,7 +83,7 @@ class TestMoedlConstructor:
         assert model.config.num_attention_heads == 4
     
     def test_construction_model_only(self):
-        """Test constructing just MoedlModel without LM head."""
+        """Test constructing just Moedl without LM head."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -57,7 +91,7 @@ class TestMoedlConstructor:
             num_hidden_layers=2,
             num_attention_heads=4,
         )
-        model = MoedlModel(config)
+        model = Moedl(config)
         assert model is not None
         assert not hasattr(model, 'lm_head')
     
@@ -124,8 +158,10 @@ class TestMoedlLlamaEquivalence:
         llama_config = AutoConfig.for_model("llama", **tiny_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
-        # Copy weights from Llama to Moedl
-        moedl_model.load_state_dict(llama_model.state_dict(), strict=True)
+        # Copy weights from Llama to Moedl with key mapping
+        llama_state_dict = llama_model.state_dict()
+        moedl_state_dict = convert_llama_state_dict_to_moedl(llama_state_dict)
+        moedl_model.load_state_dict(moedl_state_dict, strict=True)
         
         # Set to eval mode
         moedl_model.eval()
@@ -155,8 +191,10 @@ class TestMoedlLlamaEquivalence:
         llama_config = AutoConfig.for_model("llama", **tiny_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
-        # Copy weights from Llama to Moedl
-        moedl_model.load_state_dict(llama_model.state_dict(), strict=True)
+        # Copy weights from Llama to Moedl with key mapping
+        llama_state_dict = llama_model.state_dict()
+        moedl_state_dict = convert_llama_state_dict_to_moedl(llama_state_dict)
+        moedl_model.load_state_dict(moedl_state_dict, strict=True)
         
         # Set to train mode
         moedl_model.train()
@@ -192,7 +230,7 @@ class TestMoedlLlamaEquivalence:
         )
     
     def test_state_dict_compatibility(self, tiny_config):
-        """Test that state dict keys match between Moedl and Llama."""
+        """Test that state dict keys can be mapped between Moedl and Llama."""
         moedl_config = MoedlConfig(**tiny_config)
         moedl_model = MoedlForCausalLM(moedl_config)
         
@@ -202,8 +240,11 @@ class TestMoedlLlamaEquivalence:
         moedl_keys = set(moedl_model.state_dict().keys())
         llama_keys = set(llama_model.state_dict().keys())
         
-        # Keys should be identical for weight compatibility
-        assert moedl_keys == llama_keys, f"Key mismatch: {moedl_keys ^ llama_keys}"
+        # Map Llama keys to Moedl format
+        mapped_llama_keys = {llama_to_moedl_key_map(key) for key in llama_keys}
+        
+        # After mapping, keys should be identical
+        assert moedl_keys == mapped_llama_keys, f"Key mismatch: {moedl_keys ^ mapped_llama_keys}"
 
 
 class TestMoedlGenerate:
