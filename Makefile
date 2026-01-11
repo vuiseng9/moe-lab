@@ -79,3 +79,24 @@ dsv3_no_lb:
 dsv3_lb_bias:
 	$(MAKE) _deepseekv3-ts runlabel=$@-$(postfix) gamma=0.01 lr=8e-4
 
+
+_olmoe-e16-k2-tokdrop:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moelab_olmoe \
+		--config_overrides capacity_factor=$(CF),num_experts=16,num_experts_per_tok=2,intermediate_size=64,num_hidden_layers=8,hidden_size=256,num_attention_heads=8,num_key_value_heads=8,enable_lbloss=true \
+		--tokenizer_name allenai/OLMoE-1B-7B-0125"
+
+olmoe-dropless:
+	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=-1.0 lr=1e-3
+
+olmoe-tokdrop-cf1.0: 
+	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=1.0 lr=1e-3
+
+olmoe-tokdrop-cf1.5:
+	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=1.5 lr=1e-3
+
+olmoe-tokdrop-cf2.0:
+	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=2.0 lr=1e-3
+
+olmoe-tokdrop-cf2.5:
+	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=2.5 lr=1e-3
