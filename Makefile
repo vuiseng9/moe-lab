@@ -52,6 +52,24 @@ _deepseekv3-ts:
 		--config_overrides num_hidden_layers=8,hidden_size=256,q_lora_rank=128,kv_lora_rank=128,qk_rope_head_dim=16,qk_nope_head_dim=16,qk_head_dim=32,head_dim=16,v_head_dim=32,num_attention_heads=8,num_key_value_heads=8,first_k_dense_replace=0,moe_intermediate_size=128,n_shared_experts=0,n_routed_experts=8,num_experts_per_tok=1,n_group=1,topk_group=1,load_balance_gamma=$(gamma) \
 		--tokenizer_name allenai/OLMoE-1B-7B-0125" \
 
+_llama2-ts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type llama \
+		--config_overrides hidden_size=256,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,head_dim=16,intermediate_size=1024 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+
+_moedl-ts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides hidden_size=256,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,head_dim=16,intermediate_size=1024 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+
+llama2_25M:
+	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
+
+moedl_dense_25M:
+	$(MAKE) _moedl-ts runlabel=$@-$(postfix) lr=1e-3
+
 olmoe_no_lb:
 	$(MAKE) _olmoe-ts runlabel=$@-$(postfix) enable_lb=false lr=1e-3 
 
