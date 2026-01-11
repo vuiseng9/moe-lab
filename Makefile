@@ -79,3 +79,18 @@ dsv3_no_lb:
 dsv3_lb_bias:
 	$(MAKE) _deepseekv3-ts runlabel=$@-$(postfix) gamma=0.01 lr=8e-4
 
+
+
+olmoe-e32-k4-shared-experts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moelab_olmoe \
+		--config_overrides num_shared_experts=$(ES),num_experts=$$((32-$(ES))),num_experts_per_tok=$$((4-$(ES))),intermediate_size=32,num_hidden_layers=8,hidden_size=256,num_attention_heads=8,num_key_value_heads=8,enable_lbloss=true \
+		--tokenizer_name allenai/OLMoE-1B-7B-0125"
+olmoe-0-shared-e32-k4:
+	$(MAKE) olmoe-e32-k4-shared-experts runlabel=$@-$(postfix) ES=0 lr=1e-3
+olmoe-1-shared-e31-k3:
+	$(MAKE) olmoe-e32-k4-shared-experts runlabel=$@-$(postfix) ES=1 lr=3e-3
+olmoe-2-shared-e30-k2:
+	$(MAKE) olmoe-e32-k4-shared-experts runlabel=$@-$(postfix) ES=2 lr=3e-3
+olmoe-3-shared-e29-k1:
+	$(MAKE) olmoe-e32-k4-shared-experts runlabel=$@-$(postfix) ES=3 lr=3e-3
