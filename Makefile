@@ -55,23 +55,35 @@ _deepseekv3-ts:
 _llama2-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type llama \
-		--config_overrides hidden_size=256,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,head_dim=16,intermediate_size=1024 \
+		--config_overrides hidden_size=256,num_hidden_layers=8,num_attention_heads=8,num_key_value_heads=8,head_dim=32,intermediate_size=1024 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 
-_moedl-ts:
+_moedl-dense-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
-		--config_overrides num_experts=1,num_active_experts=1,hidden_size=256,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,head_dim=16,intermediate_size=1024 \
+		--config_overrides num_experts=1,num_active_experts=1,hidden_size=256,num_hidden_layers=8,num_attention_heads=8,num_key_value_heads=8,head_dim=32,intermediate_size=1024 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+
+_moedl-moe-ts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides lb_coeff=$(lb_coeff),num_experts=8,num_active_experts=1,hidden_size=256,num_hidden_layers=8,num_attention_heads=8,num_key_value_heads=8,head_dim=32,intermediate_size=256 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 
 llama2_25M:
 	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
 
 moedl_dense_25M:
-	$(MAKE) _moedl-ts runlabel=$@-$(postfix) lr=1e-3
+	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=1e-3
 
 olmoe_no_lb:
 	$(MAKE) _olmoe-ts runlabel=$@-$(postfix) enable_lb=false lr=1e-3 
+
+moedl_no_lb:
+	$(MAKE) _moedl-moe-ts runlabel=$@-$(postfix) lb_coeff=0.00 lr=1e-3
+
+moedl_with_lb:
+	$(MAKE) _moedl-moe-ts runlabel=$@-$(postfix) lb_coeff=0.01 lr=1e-3
 
 olmoe_lb_penalty:
 	$(MAKE) _olmoe-ts runlabel=$@-$(postfix) enable_lb=true lr=1e-3

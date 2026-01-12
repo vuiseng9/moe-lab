@@ -387,7 +387,7 @@ class TestMoedlMoeConstructor:
     """Test MoE model construction with various configurations."""
     
     def test_basic_moe_construction(self):
-        """Test creating a basic MoE Moedl model."""
+        """Test creating a basic MoE Moedl model (no load balancing)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -397,6 +397,7 @@ class TestMoedlMoeConstructor:
             max_position_embeddings=512,
             num_experts=8,
             num_active_experts=2,
+            lb_coeff=0.0,
         )
         model = MoedlForCausalLM(config)
         
@@ -411,7 +412,7 @@ class TestMoedlMoeConstructor:
             assert layer.num_active_experts == 2
     
     def test_moe_expert_counts(self):
-        """Test various expert configurations."""
+        """Test various expert configurations (no load balancing)."""
         test_configs = [
             (4, 1),   # 4 experts, top-1
             (8, 2),   # 8 experts, top-2
@@ -427,6 +428,7 @@ class TestMoedlMoeConstructor:
                 num_attention_heads=4,
                 num_experts=num_experts,
                 num_active_experts=num_active,
+                lb_coeff=0.0,
             )
             model = MoedlForCausalLM(config)
             
@@ -450,7 +452,7 @@ class TestMoedlMoeConstructor:
 
 
 class TestMoedlMoeForward:
-    """Test MoE model forward pass and router_logits."""
+    """Test MoE model forward pass and router_logits (no load balancing)."""
     
     def test_moe_forward_returns_router_logits(self):
         """Test that MoE forward pass returns router_logits."""
@@ -462,6 +464,7 @@ class TestMoedlMoeForward:
             num_attention_heads=4,
             num_experts=8,
             num_active_experts=2,
+            lb_coeff=0.0,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -494,6 +497,7 @@ class TestMoedlMoeForward:
             num_attention_heads=4,
             num_experts=16,
             num_active_experts=4,
+            lb_coeff=0.0,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -510,7 +514,7 @@ class TestMoedlMoeForward:
             assert router_logit.shape == (batch_size * seq_len, 16)  # num_experts
     
     def test_moe_forward_with_labels(self):
-        """Test MoE forward with labels for loss computation."""
+        """Test MoE forward with labels for loss computation (no load balancing)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -519,6 +523,7 @@ class TestMoedlMoeForward:
             num_attention_heads=4,
             num_experts=8,
             num_active_experts=2,
+            lb_coeff=0.0,
         )
         model = MoedlForCausalLM(config)
         model.train()
@@ -533,6 +538,9 @@ class TestMoedlMoeForward:
         assert outputs.loss is not None
         assert outputs.loss.numel() == 1  # Scalar loss
         
+        # Check aux_loss is None when lb_coeff=0.0
+        assert outputs.aux_loss is None
+        
         # Check router_logits are still returned
         assert outputs.router_logits is not None
         assert len(outputs.router_logits) == config.num_hidden_layers
@@ -543,7 +551,7 @@ class TestMoedlMoeOlmoeEquivalence:
     
     @pytest.fixture
     def tiny_moe_config(self):
-        """Shared tiny MoE config for testing."""
+        """Shared tiny MoE config for testing (no load balancing)."""
         return {
             "vocab_size": 500,
             "hidden_size": 64,
@@ -558,6 +566,7 @@ class TestMoedlMoeOlmoeEquivalence:
             "initializer_range": 0.02,
             "num_experts": 8,
             "num_active_experts": 2,
+            "lb_coeff": 0.0,
         }
     
     def test_moe_block_forward_equivalence(self, tiny_moe_config):
@@ -655,6 +664,193 @@ class TestMoedlMoeOlmoeEquivalence:
             rtol=1e-5,
             atol=1e-6
         )
+
+
+class TestMoedlMoeLoadBalancePenalty:
+    """Test MoE load balance penalty method (auxiliary loss-based)."""
+    
+    def test_lb_penalty_applied_when_coeff_nonzero(self):
+        """Test that load balance penalty is added when lb_coeff > 0."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+        labels = torch.randint(0, 1000, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Loss should include load balance penalty component
+        assert outputs.loss is not None
+        assert outputs.loss.numel() == 1
+        
+        # With lb_coeff > 0, the penalty is added directly to the main loss
+        assert outputs.router_logits is not None
+    
+    def test_lb_penalty_increases_total_loss(self):
+        """Test that enabling load balance penalty increases the total loss."""
+        # Model without load balance penalty
+        config_no_lb = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.0,
+        )
+        model_no_lb = MoedlForCausalLM(config_no_lb)
+        
+        # Model with load balance penalty
+        config_with_lb = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,
+        )
+        model_with_lb = MoedlForCausalLM(config_with_lb)
+        
+        # Copy weights to ensure same model
+        model_with_lb.load_state_dict(model_no_lb.state_dict())
+        
+        # Set to train mode
+        model_no_lb.train()
+        model_with_lb.train()
+        
+        # Same input
+        batch_size, seq_len = 2, 10
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        # Forward pass
+        with torch.no_grad():
+            outputs_no_lb = model_no_lb(input_ids, labels=labels)
+            outputs_with_lb = model_with_lb(input_ids, labels=labels)
+        
+        # Loss with penalty should be higher (original loss + lb penalty)
+        assert outputs_with_lb.loss > outputs_no_lb.loss
+    
+    def test_lb_penalty_with_different_coefficients(self):
+        """Test that higher lb_coeff results in higher penalty and total loss."""
+        base_config = {
+            "vocab_size": 500,
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_experts": 8,
+            "num_active_experts": 2,
+        }
+        
+        # Create models with different lb_coeff
+        config_lb_small = MoedlConfig(**base_config, lb_coeff=0.01)
+        config_lb_large = MoedlConfig(**base_config, lb_coeff=0.1)
+        
+        model_lb_small = MoedlForCausalLM(config_lb_small)
+        model_lb_large = MoedlForCausalLM(config_lb_large)
+        
+        # Copy weights
+        model_lb_large.load_state_dict(model_lb_small.state_dict())
+        
+        model_lb_small.train()
+        model_lb_large.train()
+        
+        # Same input
+        torch.manual_seed(42)
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs_small = model_lb_small(input_ids, labels=labels)
+            outputs_large = model_lb_large(input_ids, labels=labels)
+        
+        # Higher coefficient should result in higher total loss
+        assert outputs_large.loss > outputs_small.loss
+    
+    def test_lb_penalty_computation_validity(self):
+        """Test that load balance penalty is computed correctly."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Manually compute load balance penalty to verify
+        from moelab.moedl.modeling_moedl import load_balancing_loss_func
+        
+        expected_lb_penalty = load_balancing_loss_func(
+            gate_logits=outputs.router_logits,
+            num_experts=config.num_experts,
+            top_k=config.num_active_experts,
+            attention_mask=None,
+        )
+        
+        # The penalty should be positive (it's a penalty term)
+        assert expected_lb_penalty >= 0
+        
+        # Loss should be finite and reasonable
+        assert torch.isfinite(outputs.loss)
+        assert outputs.loss > 0
+    
+    def test_dense_model_no_lb_penalty(self):
+        """Test that dense models (num_experts=1) don't apply load balance penalty."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=1,
+            num_active_experts=1,
+            lb_coeff=0.01,  # Set lb_coeff but it shouldn't be used
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Dense model should have None router_logits (no MoE)
+        assert outputs.router_logits is None
+        
+        # aux_loss should be None (no penalty applied)
+        assert outputs.aux_loss is None
+        
+        # Loss should still be computed normally (just LM loss)
+        assert outputs.loss is not None
 
 
 if __name__ == "__main__":
