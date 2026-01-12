@@ -32,6 +32,9 @@ class MoedlConfig(PretrainedConfig):
         attention_dropout=0.0,
         mlp_bias=False,
         head_dim=None,
+        # MoE specific
+        num_experts=16,
+        num_active_experts=4,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -57,6 +60,18 @@ class MoedlConfig(PretrainedConfig):
         self.attention_dropout = attention_dropout
         self.mlp_bias = mlp_bias
         self.head_dim = head_dim if head_dim is not None else self.hidden_size // self.num_attention_heads
+        # MoE specific
+        if num_experts <= 0 or num_active_experts <= 0:
+            raise ValueError("num_experts and num_active_experts must be positive integers.")
+        elif num_experts > 1:
+            self.num_experts = num_experts
+            if num_active_experts > num_experts:
+                raise ValueError("num_active_experts cannot be greater than num_experts.")
+            self.num_active_experts = num_active_experts
+        else:
+            self.num_experts = 1  # Disable MoE when num_experts is set to 1
+            self.num_active_experts = 1         
+
         # Validate the correctness of rotary position embeddings parameters
         # BC: if there is a 'type' field, copy it it to 'rope_type'.
         if self.rope_scaling is not None and "type" in self.rope_scaling:

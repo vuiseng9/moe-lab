@@ -15,8 +15,8 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_u
 from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
-    CausalLMOutputWithPast,
+    MoeModelOutputWithPast,
+    MoeCausalLMOutputWithPast,
 )
 from transformers.utils import TransformersKwargs, can_return_tuple, logging
 from transformers.processing_utils import Unpack
@@ -140,6 +140,71 @@ class MoedlMLP(nn.Module):
     def forward(self, x):
         down_proj = self.down(self.act(self.gate(x)) * self.up(x))
         return down_proj
+
+
+class MoeBlk(nn.Module):
+    def __init__(self, config: MoedlConfig):
+        super().__init__()
+        self.num_experts = config.num_experts
+        self.num_active_experts = config.num_active_experts
+
+        self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
+        self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
+
+    def extra_repr(self):
+        K = self.num_active_experts
+        E = self.num_experts
+        return f"[K:E] = {K}:{E}, sparsity: {K/E*100:.2f}%"
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        x = hidden_states
+        assert x.is_floating_point(), "MoE forward input must be floating point type."
+        eps = torch.finfo(x.dtype).eps
+
+        # prefix notation: 
+        # k = activated expert id 
+        # e = expert id 
+        # t = token id 
+        # batch size, sequence length, token dimension 
+        B, L, D = x.size() 
+        T = B * L 
+        K = self.num_active_experts
+        E = self.num_experts
+
+        _x = x.view(T, D) # all tokens in a single list (dimension) 
+        
+        # router: predict logits over all experts 
+        # Top-K expert selection post softmax normalization
+        # element value of k_weights is the softmax-normalized score
+        # element value of k_ids is in [0, E-1], the eid 
+        # renormalize k-expert weights among themselves
+        router_logits = self.router(_x) # (T, E)
+        router_scores = router_logits.softmax(dim=-1) 
+        k_weights, k_ids = router_scores.topk(K, dim=-1)  
+        k_weights = k_weights / ( k_weights.sum(dim=-1, keepdim=True) + eps ) 
+
+        # == Expert Computation and Accumulation ==
+        # initialize output buffer, per token, output dimension
+        # accumulate directly for every k slot.
+        # accumulation save buffer space.
+        moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
+
+        # loop over experts, 
+        # 
+        for eid in range(E):
+            # tok_ids: indices of tokens to be attended by expert eid 
+            # which_k: for each token, which k slot it is from 0 to K 
+            tok_ids, which_k = torch.where(k_ids == eid)
+
+            # current gather tokens, extract corresponding weights
+            expert = self.experts[eid]
+            tokens = _x[tok_ids]
+            weights = k_weights[tok_ids, which_k].unsqueeze(-1) 
+
+            # forward pass, output accumulate back to moe_outputs
+            moe_outputs[tok_ids, :] += expert(tokens) * weights
+
+        return moe_outputs.view(B, L, D), router_logits 
 
 
 # Copied from transformers.models.llama.modeling_llama.repeat_kv
@@ -480,7 +545,12 @@ class MoedlDecoderLayer(GradientCheckpointingLayer):
         self.attn = MoedlAttention(config=config, layer_idx=layer_idx)
 
         self.norm_mlp = MoedlRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = MoedlMLP(config)
+        self.num_experts = config.num_experts
+        self.num_active_experts = config.num_active_experts
+        if self.num_experts > 1:
+            self.moe = MoeBlk(config)
+        else:
+            self.mlp = MoedlMLP(config)
 
     @deprecate_kwarg("past_key_value", new_name="past_key_values", version="4.58")
     def forward(
@@ -492,6 +562,7 @@ class MoedlDecoderLayer(GradientCheckpointingLayer):
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        return_router_logits: bool = False,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.Tensor:
         residual = hidden_states
@@ -512,8 +583,15 @@ class MoedlDecoderLayer(GradientCheckpointingLayer):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.norm_mlp(hidden_states)
-        hidden_states = self.mlp(hidden_states)
+        if self.num_experts > 1:
+            hidden_states, router_logits = self.moe(hidden_states)
+        else:
+            hidden_states = self.mlp(hidden_states)
+
         hidden_states = residual + hidden_states
+
+        if self.num_experts > 1:
+            return hidden_states, router_logits
         return hidden_states
 
 
@@ -550,6 +628,8 @@ class Moedl(MoedlPreTrainedModel):
         self.rotary_emb = MoedlRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
 
+        self.num_experts = config.num_experts
+        self.num_active_experts = config.num_active_experts
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -564,7 +644,7 @@ class Moedl(MoedlPreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         **kwargs: Unpack[TransformersKwargs],
-    ) -> BaseModelOutputWithPast:
+    ) -> MoeModelOutputWithPast:
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
@@ -595,8 +675,9 @@ class Moedl(MoedlPreTrainedModel):
         hidden_states = inputs_embeds
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
+        all_router_logits = ()
         for decoder_layer in self.layers[: self.config.num_hidden_layers]:
-            hidden_states = decoder_layer(
+            decoder_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=causal_mask,
                 position_ids=position_ids,
@@ -605,11 +686,17 @@ class Moedl(MoedlPreTrainedModel):
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
+            if self.num_experts > 1:
+                hidden_states, router_logits = decoder_outputs
+                all_router_logits += (router_logits,)
+            else:
+                hidden_states = decoder_outputs
 
         hidden_states = self.norm(hidden_states)
-        return BaseModelOutputWithPast(
+        return MoeModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
+            router_logits=all_router_logits if self.num_experts > 1 else None,
         )
 
 
@@ -641,7 +728,7 @@ class MoedlForCausalLM(MoedlPreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
         **kwargs: Unpack[TransformersKwargs],
-    ) -> CausalLMOutputWithPast:
+    ) -> MoeCausalLMOutputWithPast:
         r"""
         Example:
 
@@ -659,7 +746,7 @@ class MoedlForCausalLM(MoedlPreTrainedModel, GenerationMixin):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
-        outputs: BaseModelOutputWithPast = self.model(
+        outputs: MoeModelOutputWithPast = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -679,13 +766,15 @@ class MoedlForCausalLM(MoedlPreTrainedModel, GenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
-        return CausalLMOutputWithPast(
+        return MoeCausalLMOutputWithPast(
             loss=loss,
+            aux_loss=None,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            router_logits=outputs.router_logits,
         )
-    
+
 
 __all__ = ["MoedlForCausalLM", "Moedl", "MoedlPreTrainedModel"]

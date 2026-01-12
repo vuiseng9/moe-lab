@@ -61,7 +61,7 @@ _llama2-ts:
 _moedl-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
-		--config_overrides hidden_size=256,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,head_dim=16,intermediate_size=1024 \
+		--config_overrides num_experts=1,num_active_experts=1,hidden_size=256,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,head_dim=16,intermediate_size=1024 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 
 llama2_25M:

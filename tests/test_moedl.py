@@ -48,11 +48,11 @@ def convert_llama_state_dict_to_moedl(llama_state_dict: dict) -> dict:
         moedl_state_dict[moedl_key] = value
     return moedl_state_dict
 
-class TestMoedlConstructor:
-    """Test model construction with various configurations."""
+class TestMoedlDenseConstructor:
+    """Test dense model construction with various configurations."""
     
-    def test_basic_construction(self):
-        """Test creating a minimal Moedl model."""
+    def test_basic_dense_construction(self):
+        """Test creating a minimal dense Moedl model."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -60,6 +60,8 @@ class TestMoedlConstructor:
             num_hidden_layers=2,
             num_attention_heads=4,
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         assert model is not None
@@ -67,8 +69,8 @@ class TestMoedlConstructor:
         assert model.config.hidden_size == 128
         assert model.config.num_hidden_layers == 2
     
-    def test_construction_with_gqa(self):
-        """Test construction with grouped-query attention."""
+    def test_dense_construction_with_gqa(self):
+        """Test dense construction with grouped-query attention."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -77,26 +79,30 @@ class TestMoedlConstructor:
             num_attention_heads=4,
             num_key_value_heads=2,  # GQA
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         assert model.config.num_key_value_heads == 2
         assert model.config.num_attention_heads == 4
     
-    def test_construction_model_only(self):
-        """Test constructing just Moedl without LM head."""
+    def test_dense_construction_model_only(self):
+        """Test constructing just dense Moedl without LM head."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
             intermediate_size=256,
             num_hidden_layers=2,
             num_attention_heads=4,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = Moedl(config)
         assert model is not None
         assert not hasattr(model, 'lm_head')
     
-    def test_fail_invalid_heads(self):
-        """Test that invalid head configuration raises error during forward."""
+    def test_dense_fail_invalid_heads(self):
+        """Test that invalid head configuration raises error during forward (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -104,6 +110,8 @@ class TestMoedlConstructor:
             num_hidden_layers=2,
             num_attention_heads=5,  # Not divisible into hidden_size
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         
@@ -111,8 +119,8 @@ class TestMoedlConstructor:
         with pytest.raises(RuntimeError):
             _ = model(torch.randint(0, 1000, (1, 10)))
     
-    def test_fail_kv_heads_mismatch(self):
-        """Test that kv_heads > num_heads fails during forward."""
+    def test_dense_fail_kv_heads_mismatch(self):
+        """Test that kv_heads > num_heads fails during forward (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -121,6 +129,8 @@ class TestMoedlConstructor:
             num_attention_heads=4,
             num_key_value_heads=8,  # Can't have more KV heads than query heads
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         
@@ -129,12 +139,12 @@ class TestMoedlConstructor:
             _ = model(torch.randint(0, 1000, (1, 10)))
 
 
-class TestMoedlLlamaEquivalence:
-    """Test equivalence between Moedl and Llama models."""
+class TestMoedlDenseLlamaEquivalence:
+    """Test equivalence between dense Moedl and Llama models."""
     
     @pytest.fixture
-    def tiny_config(self):
-        """Shared tiny config for testing."""
+    def tiny_dense_config(self):
+        """Shared tiny dense config for equivalence testing."""
         return {
             "vocab_size": 1000,
             "hidden_size": 128,
@@ -147,15 +157,17 @@ class TestMoedlLlamaEquivalence:
             "rope_theta": 10000.0,
             "hidden_act": "silu",
             "initializer_range": 0.02,
+            "num_experts": 1,
+            "num_active_experts": 1,
         }
     
-    def test_forward_equivalence(self, tiny_config):
-        """Test that Moedl and Llama produce same outputs with same weights."""
+    def test_forward_equivalence(self, tiny_dense_config):
+        """Test that dense Moedl and Llama produce same outputs with same weights."""
         # Create both models
-        moedl_config = MoedlConfig(**tiny_config)
+        moedl_config = MoedlConfig(**tiny_dense_config)
         moedl_model = MoedlForCausalLM(moedl_config)
         
-        llama_config = AutoConfig.for_model("llama", **tiny_config)
+        llama_config = AutoConfig.for_model("llama", **tiny_dense_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
         # Copy weights from Llama to Moedl with key mapping
@@ -168,7 +180,7 @@ class TestMoedlLlamaEquivalence:
         llama_model.eval()
         
         # Test forward pass
-        input_ids = torch.randint(0, tiny_config["vocab_size"], (2, 32))
+        input_ids = torch.randint(0, tiny_dense_config["vocab_size"], (2, 32))
         
         with torch.no_grad():
             moedl_out = moedl_model(input_ids)
@@ -182,13 +194,13 @@ class TestMoedlLlamaEquivalence:
             atol=1e-5
         )
     
-    def test_backward_equivalence(self, tiny_config):
-        """Test that gradients are equivalent between Moedl and Llama."""
+    def test_backward_equivalence(self, tiny_dense_config):
+        """Test that gradients are equivalent between dense Moedl and Llama."""
         # Create both models
-        moedl_config = MoedlConfig(**tiny_config)
+        moedl_config = MoedlConfig(**tiny_dense_config)
         moedl_model = MoedlForCausalLM(moedl_config)
         
-        llama_config = AutoConfig.for_model("llama", **tiny_config)
+        llama_config = AutoConfig.for_model("llama", **tiny_dense_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
         # Copy weights from Llama to Moedl with key mapping
@@ -202,8 +214,8 @@ class TestMoedlLlamaEquivalence:
         
         # Create input and labels
         batch_size, seq_len = 2, 32
-        input_ids = torch.randint(0, tiny_config["vocab_size"], (batch_size, seq_len))
-        labels = torch.randint(0, tiny_config["vocab_size"], (batch_size, seq_len))
+        input_ids = torch.randint(0, tiny_dense_config["vocab_size"], (batch_size, seq_len))
+        labels = torch.randint(0, tiny_dense_config["vocab_size"], (batch_size, seq_len))
         
         # Forward + backward for Moedl
         moedl_out = moedl_model(input_ids, labels=labels)
@@ -229,12 +241,12 @@ class TestMoedlLlamaEquivalence:
             atol=1e-5
         )
     
-    def test_state_dict_compatibility(self, tiny_config):
-        """Test that state dict keys can be mapped between Moedl and Llama."""
-        moedl_config = MoedlConfig(**tiny_config)
+    def test_state_dict_compatibility(self, tiny_dense_config):
+        """Test that state dict keys can be mapped between dense Moedl and Llama."""
+        moedl_config = MoedlConfig(**tiny_dense_config)
         moedl_model = MoedlForCausalLM(moedl_config)
         
-        llama_config = AutoConfig.for_model("llama", **tiny_config)
+        llama_config = AutoConfig.for_model("llama", **tiny_dense_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
         moedl_keys = set(moedl_model.state_dict().keys())
@@ -247,11 +259,11 @@ class TestMoedlLlamaEquivalence:
         assert moedl_keys == mapped_llama_keys, f"Key mismatch: {moedl_keys ^ mapped_llama_keys}"
 
 
-class TestMoedlGenerate:
-    """Test generation functionality."""
+class TestMoedlDenseGenerate:
+    """Test generation functionality for dense models."""
     
-    def test_basic_generate(self):
-        """Test basic text generation."""
+    def test_dense_basic_generate(self):
+        """Test basic text generation with dense model."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -259,6 +271,8 @@ class TestMoedlGenerate:
             num_hidden_layers=2,
             num_attention_heads=4,
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -275,8 +289,8 @@ class TestMoedlGenerate:
         assert outputs.shape[0] == 1  # batch size
         assert outputs.shape[1] == 30  # 10 input + 20 generated
     
-    def test_generate_with_sampling(self):
-        """Test generation with sampling."""
+    def test_dense_generate_with_sampling(self):
+        """Test generation with sampling (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -284,6 +298,8 @@ class TestMoedlGenerate:
             num_hidden_layers=2,
             num_attention_heads=4,
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -302,8 +318,8 @@ class TestMoedlGenerate:
         assert outputs.shape[0] == 1
         assert outputs.shape[1] == 25
     
-    def test_generate_batch(self):
-        """Test batched generation."""
+    def test_dense_generate_batch(self):
+        """Test batched generation (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -312,6 +328,8 @@ class TestMoedlGenerate:
             num_attention_heads=4,
             max_position_embeddings=512,
             pad_token_id=0,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -332,8 +350,8 @@ class TestMoedlGenerate:
         assert outputs.shape[0] == batch_size
         assert outputs.shape[1] == 20
     
-    def test_generate_with_eos(self):
-        """Test early stopping with EOS token."""
+    def test_dense_generate_with_eos(self):
+        """Test early stopping with EOS token (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -342,6 +360,8 @@ class TestMoedlGenerate:
             num_attention_heads=4,
             max_position_embeddings=512,
             eos_token_id=2,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
