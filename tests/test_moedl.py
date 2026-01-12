@@ -383,6 +383,280 @@ class TestMoedlDenseGenerate:
         assert outputs.shape[1] <= 60  # At most input + max_new
 
 
+class TestMoedlMoeConstructor:
+    """Test MoE model construction with various configurations."""
+    
+    def test_basic_moe_construction(self):
+        """Test creating a basic MoE Moedl model."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            max_position_embeddings=512,
+            num_experts=8,
+            num_active_experts=2,
+        )
+        model = MoedlForCausalLM(config)
+        
+        assert model is not None
+        assert model.config.num_experts == 8
+        assert model.config.num_active_experts == 2
+        
+        # Verify MoeBlk is used in decoder layers
+        for layer in model.model.layers:
+            assert hasattr(layer, 'moe')
+            assert layer.num_experts == 8
+            assert layer.num_active_experts == 2
+    
+    def test_moe_expert_counts(self):
+        """Test various expert configurations."""
+        test_configs = [
+            (4, 1),   # 4 experts, top-1
+            (8, 2),   # 8 experts, top-2
+            (16, 4),  # 16 experts, top-4
+        ]
+        
+        for num_experts, num_active in test_configs:
+            config = MoedlConfig(
+                vocab_size=1000,
+                hidden_size=128,
+                intermediate_size=256,
+                num_hidden_layers=2,
+                num_attention_heads=4,
+                num_experts=num_experts,
+                num_active_experts=num_active,
+            )
+            model = MoedlForCausalLM(config)
+            
+            assert model.config.num_experts == num_experts
+            assert model.config.num_active_experts == num_active
+            
+            # Check each layer
+            for layer in model.model.layers:
+                assert len(layer.moe.experts) == num_experts
+    
+    def test_moe_fail_invalid_expert_config(self):
+        """Test that invalid expert configurations fail."""
+        # num_active_experts > num_experts should fail
+        with pytest.raises(ValueError):
+            config = MoedlConfig(
+                vocab_size=1000,
+                hidden_size=128,
+                num_experts=4,
+                num_active_experts=8,  # More active than total
+            )
+
+
+class TestMoedlMoeForward:
+    """Test MoE model forward pass and router_logits."""
+    
+    def test_moe_forward_returns_router_logits(self):
+        """Test that MoE forward pass returns router_logits."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs = model(input_ids)
+        
+        # Check that router_logits are returned
+        assert hasattr(outputs, 'router_logits')
+        assert outputs.router_logits is not None
+        
+        # router_logits should be a tuple with one tensor per layer
+        assert isinstance(outputs.router_logits, tuple)
+        assert len(outputs.router_logits) == config.num_hidden_layers
+        
+        # Each router_logits tensor should have shape (batch_size * seq_len, num_experts)
+        for router_logit in outputs.router_logits:
+            assert router_logit.shape == (batch_size * seq_len, config.num_experts)
+    
+    def test_moe_router_logits_shape(self):
+        """Test router_logits shapes with different configurations."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=3,
+            num_attention_heads=4,
+            num_experts=16,
+            num_active_experts=4,
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        batch_size, seq_len = 4, 20
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs = model(input_ids)
+        
+        # Verify router_logits structure
+        assert len(outputs.router_logits) == 3  # num_hidden_layers
+        for router_logit in outputs.router_logits:
+            assert router_logit.shape == (batch_size * seq_len, 16)  # num_experts
+    
+    def test_moe_forward_with_labels(self):
+        """Test MoE forward with labels for loss computation."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+        labels = torch.randint(0, 1000, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Check loss is computed
+        assert outputs.loss is not None
+        assert outputs.loss.numel() == 1  # Scalar loss
+        
+        # Check router_logits are still returned
+        assert outputs.router_logits is not None
+        assert len(outputs.router_logits) == config.num_hidden_layers
+
+
+class TestMoedlMoeOlmoeEquivalence:
+    """Test equivalence between Moedl MoeBlk and Olmoe SparseMoeBlock."""
+    
+    @pytest.fixture
+    def tiny_moe_config(self):
+        """Shared tiny MoE config for testing."""
+        return {
+            "vocab_size": 500,
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 4,
+            "max_position_embeddings": 512,
+            "rms_norm_eps": 1e-5,
+            "rope_theta": 10000.0,
+            "hidden_act": "silu",
+            "initializer_range": 0.02,
+            "num_experts": 8,
+            "num_active_experts": 2,
+        }
+    
+    def test_moe_block_forward_equivalence(self, tiny_moe_config):
+        """Test that MoeBlk produces same output as OlmoeSparseMoeBlock with same weights."""
+        from transformers.models.olmoe.modeling_olmoe import OlmoeSparseMoeBlock, OlmoeConfig
+        from moelab.moedl.modeling_moedl import MoeBlk
+        
+        # Create Moedl MoeBlk
+        moedl_config = MoedlConfig(**tiny_moe_config)
+        moedl_moe = MoeBlk(moedl_config)
+        
+        # Create Olmoe SparseMoeBlock with compatible config
+        # Olmoe uses num_experts_per_tok instead of num_active_experts
+        # Set norm_topk_prob=True to match Moedl's normalization behavior
+        olmoe_config_dict = {
+            "hidden_size": tiny_moe_config["hidden_size"],
+            "intermediate_size": tiny_moe_config["intermediate_size"],
+            "num_experts": tiny_moe_config["num_experts"],
+            "num_experts_per_tok": tiny_moe_config["num_active_experts"],
+            "norm_topk_prob": True,  # Moedl always normalizes topk weights
+            "hidden_act": tiny_moe_config["hidden_act"],
+            "mlp_bias": False,
+        }
+        olmoe_config = OlmoeConfig(**olmoe_config_dict)
+        olmoe_moe = OlmoeSparseMoeBlock(olmoe_config)
+        
+        # Copy weights from Olmoe to Moedl
+        # Router weights
+        moedl_moe.router.weight.data.copy_(olmoe_moe.gate.weight.data)
+        
+        # Expert weights
+        for i in range(tiny_moe_config["num_experts"]):
+            moedl_moe.experts[i].gate.weight.data.copy_(olmoe_moe.experts[i].gate_proj.weight.data)
+            moedl_moe.experts[i].up.weight.data.copy_(olmoe_moe.experts[i].up_proj.weight.data)
+            moedl_moe.experts[i].down.weight.data.copy_(olmoe_moe.experts[i].down_proj.weight.data)
+        
+        # Set to eval mode
+        moedl_moe.eval()
+        olmoe_moe.eval()
+        
+        # Test forward pass
+        batch_size, seq_len, hidden_dim = 2, 10, tiny_moe_config["hidden_size"]
+        hidden_states = torch.randn(batch_size, seq_len, hidden_dim)
+        
+        with torch.no_grad():
+            moedl_output, moedl_router_logits = moedl_moe(hidden_states)
+            olmoe_output, olmoe_router_logits = olmoe_moe(hidden_states)
+        
+        # Check outputs match
+        torch.testing.assert_close(
+            moedl_output,
+            olmoe_output,
+            rtol=1e-4,
+            atol=1e-5
+        )
+        
+        # Check router logits match
+        torch.testing.assert_close(
+            moedl_router_logits,
+            olmoe_router_logits,
+            rtol=1e-4,
+            atol=1e-5
+        )
+    
+    def test_moe_block_expert_selection(self, tiny_moe_config):
+        """Test that expert selection works correctly."""
+        from moelab.moedl.modeling_moedl import MoeBlk
+        
+        config = MoedlConfig(**tiny_moe_config)
+        moe = MoeBlk(config)
+        moe.eval()
+        
+        batch_size, seq_len, hidden_dim = 2, 5, tiny_moe_config["hidden_size"]
+        hidden_states = torch.randn(batch_size, seq_len, hidden_dim)
+        
+        with torch.no_grad():
+            output, router_logits = moe(hidden_states)
+        
+        # Check output shape
+        assert output.shape == (batch_size, seq_len, hidden_dim)
+        
+        # Check router_logits shape
+        assert router_logits.shape == (batch_size * seq_len, config.num_experts)
+        
+        # Verify that routing probabilities sum to ~1 after softmax and topk
+        router_probs = router_logits.softmax(dim=-1)
+        topk_probs, topk_indices = router_probs.topk(config.num_active_experts, dim=-1)
+        
+        # After normalization, topk weights should sum to 1
+        # (accounting for numerical precision)
+        topk_weights = topk_probs / (topk_probs.sum(dim=-1, keepdim=True) + 1e-12)
+        torch.testing.assert_close(
+            topk_weights.sum(dim=-1),
+            torch.ones(batch_size * seq_len),
+            rtol=1e-5,
+            atol=1e-6
+        )
+
+
 if __name__ == "__main__":
     # Allow running tests directly
     pytest.main([__file__, "-v"])
