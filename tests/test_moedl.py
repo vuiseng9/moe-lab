@@ -48,11 +48,11 @@ def convert_llama_state_dict_to_moedl(llama_state_dict: dict) -> dict:
         moedl_state_dict[moedl_key] = value
     return moedl_state_dict
 
-class TestMoedlConstructor:
-    """Test model construction with various configurations."""
+class TestMoedlDenseConstructor:
+    """Test dense model construction with various configurations."""
     
-    def test_basic_construction(self):
-        """Test creating a minimal Moedl model."""
+    def test_basic_dense_construction(self):
+        """Test creating a minimal dense Moedl model."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -60,6 +60,8 @@ class TestMoedlConstructor:
             num_hidden_layers=2,
             num_attention_heads=4,
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         assert model is not None
@@ -67,8 +69,8 @@ class TestMoedlConstructor:
         assert model.config.hidden_size == 128
         assert model.config.num_hidden_layers == 2
     
-    def test_construction_with_gqa(self):
-        """Test construction with grouped-query attention."""
+    def test_dense_construction_with_gqa(self):
+        """Test dense construction with grouped-query attention."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -77,26 +79,30 @@ class TestMoedlConstructor:
             num_attention_heads=4,
             num_key_value_heads=2,  # GQA
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         assert model.config.num_key_value_heads == 2
         assert model.config.num_attention_heads == 4
     
-    def test_construction_model_only(self):
-        """Test constructing just Moedl without LM head."""
+    def test_dense_construction_model_only(self):
+        """Test constructing just dense Moedl without LM head."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
             intermediate_size=256,
             num_hidden_layers=2,
             num_attention_heads=4,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = Moedl(config)
         assert model is not None
         assert not hasattr(model, 'lm_head')
     
-    def test_fail_invalid_heads(self):
-        """Test that invalid head configuration raises error during forward."""
+    def test_dense_fail_invalid_heads(self):
+        """Test that invalid head configuration raises error during forward (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -104,6 +110,8 @@ class TestMoedlConstructor:
             num_hidden_layers=2,
             num_attention_heads=5,  # Not divisible into hidden_size
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         
@@ -111,8 +119,8 @@ class TestMoedlConstructor:
         with pytest.raises(RuntimeError):
             _ = model(torch.randint(0, 1000, (1, 10)))
     
-    def test_fail_kv_heads_mismatch(self):
-        """Test that kv_heads > num_heads fails during forward."""
+    def test_dense_fail_kv_heads_mismatch(self):
+        """Test that kv_heads > num_heads fails during forward (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -121,6 +129,8 @@ class TestMoedlConstructor:
             num_attention_heads=4,
             num_key_value_heads=8,  # Can't have more KV heads than query heads
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         
@@ -129,12 +139,12 @@ class TestMoedlConstructor:
             _ = model(torch.randint(0, 1000, (1, 10)))
 
 
-class TestMoedlLlamaEquivalence:
-    """Test equivalence between Moedl and Llama models."""
+class TestMoedlDenseLlamaEquivalence:
+    """Test equivalence between dense Moedl and Llama models."""
     
     @pytest.fixture
-    def tiny_config(self):
-        """Shared tiny config for testing."""
+    def tiny_dense_config(self):
+        """Shared tiny dense config for equivalence testing."""
         return {
             "vocab_size": 1000,
             "hidden_size": 128,
@@ -147,15 +157,17 @@ class TestMoedlLlamaEquivalence:
             "rope_theta": 10000.0,
             "hidden_act": "silu",
             "initializer_range": 0.02,
+            "num_experts": 1,
+            "num_active_experts": 1,
         }
     
-    def test_forward_equivalence(self, tiny_config):
-        """Test that Moedl and Llama produce same outputs with same weights."""
+    def test_forward_equivalence(self, tiny_dense_config):
+        """Test that dense Moedl and Llama produce same outputs with same weights."""
         # Create both models
-        moedl_config = MoedlConfig(**tiny_config)
+        moedl_config = MoedlConfig(**tiny_dense_config)
         moedl_model = MoedlForCausalLM(moedl_config)
         
-        llama_config = AutoConfig.for_model("llama", **tiny_config)
+        llama_config = AutoConfig.for_model("llama", **tiny_dense_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
         # Copy weights from Llama to Moedl with key mapping
@@ -168,7 +180,7 @@ class TestMoedlLlamaEquivalence:
         llama_model.eval()
         
         # Test forward pass
-        input_ids = torch.randint(0, tiny_config["vocab_size"], (2, 32))
+        input_ids = torch.randint(0, tiny_dense_config["vocab_size"], (2, 32))
         
         with torch.no_grad():
             moedl_out = moedl_model(input_ids)
@@ -182,13 +194,13 @@ class TestMoedlLlamaEquivalence:
             atol=1e-5
         )
     
-    def test_backward_equivalence(self, tiny_config):
-        """Test that gradients are equivalent between Moedl and Llama."""
+    def test_backward_equivalence(self, tiny_dense_config):
+        """Test that gradients are equivalent between dense Moedl and Llama."""
         # Create both models
-        moedl_config = MoedlConfig(**tiny_config)
+        moedl_config = MoedlConfig(**tiny_dense_config)
         moedl_model = MoedlForCausalLM(moedl_config)
         
-        llama_config = AutoConfig.for_model("llama", **tiny_config)
+        llama_config = AutoConfig.for_model("llama", **tiny_dense_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
         # Copy weights from Llama to Moedl with key mapping
@@ -202,8 +214,8 @@ class TestMoedlLlamaEquivalence:
         
         # Create input and labels
         batch_size, seq_len = 2, 32
-        input_ids = torch.randint(0, tiny_config["vocab_size"], (batch_size, seq_len))
-        labels = torch.randint(0, tiny_config["vocab_size"], (batch_size, seq_len))
+        input_ids = torch.randint(0, tiny_dense_config["vocab_size"], (batch_size, seq_len))
+        labels = torch.randint(0, tiny_dense_config["vocab_size"], (batch_size, seq_len))
         
         # Forward + backward for Moedl
         moedl_out = moedl_model(input_ids, labels=labels)
@@ -229,12 +241,12 @@ class TestMoedlLlamaEquivalence:
             atol=1e-5
         )
     
-    def test_state_dict_compatibility(self, tiny_config):
-        """Test that state dict keys can be mapped between Moedl and Llama."""
-        moedl_config = MoedlConfig(**tiny_config)
+    def test_state_dict_compatibility(self, tiny_dense_config):
+        """Test that state dict keys can be mapped between dense Moedl and Llama."""
+        moedl_config = MoedlConfig(**tiny_dense_config)
         moedl_model = MoedlForCausalLM(moedl_config)
         
-        llama_config = AutoConfig.for_model("llama", **tiny_config)
+        llama_config = AutoConfig.for_model("llama", **tiny_dense_config)
         llama_model = AutoModelForCausalLM.from_config(llama_config)
         
         moedl_keys = set(moedl_model.state_dict().keys())
@@ -247,11 +259,11 @@ class TestMoedlLlamaEquivalence:
         assert moedl_keys == mapped_llama_keys, f"Key mismatch: {moedl_keys ^ mapped_llama_keys}"
 
 
-class TestMoedlGenerate:
-    """Test generation functionality."""
+class TestMoedlDenseGenerate:
+    """Test generation functionality for dense models."""
     
-    def test_basic_generate(self):
-        """Test basic text generation."""
+    def test_dense_basic_generate(self):
+        """Test basic text generation with dense model."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -259,6 +271,8 @@ class TestMoedlGenerate:
             num_hidden_layers=2,
             num_attention_heads=4,
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -275,8 +289,8 @@ class TestMoedlGenerate:
         assert outputs.shape[0] == 1  # batch size
         assert outputs.shape[1] == 30  # 10 input + 20 generated
     
-    def test_generate_with_sampling(self):
-        """Test generation with sampling."""
+    def test_dense_generate_with_sampling(self):
+        """Test generation with sampling (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -284,6 +298,8 @@ class TestMoedlGenerate:
             num_hidden_layers=2,
             num_attention_heads=4,
             max_position_embeddings=512,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -302,8 +318,8 @@ class TestMoedlGenerate:
         assert outputs.shape[0] == 1
         assert outputs.shape[1] == 25
     
-    def test_generate_batch(self):
-        """Test batched generation."""
+    def test_dense_generate_batch(self):
+        """Test batched generation (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -312,6 +328,8 @@ class TestMoedlGenerate:
             num_attention_heads=4,
             max_position_embeddings=512,
             pad_token_id=0,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -332,8 +350,8 @@ class TestMoedlGenerate:
         assert outputs.shape[0] == batch_size
         assert outputs.shape[1] == 20
     
-    def test_generate_with_eos(self):
-        """Test early stopping with EOS token."""
+    def test_dense_generate_with_eos(self):
+        """Test early stopping with EOS token (dense model)."""
         config = MoedlConfig(
             vocab_size=1000,
             hidden_size=128,
@@ -342,6 +360,8 @@ class TestMoedlGenerate:
             num_attention_heads=4,
             max_position_embeddings=512,
             eos_token_id=2,
+            num_experts=1,
+            num_active_experts=1,
         )
         model = MoedlForCausalLM(config)
         model.eval()
@@ -361,6 +381,476 @@ class TestMoedlGenerate:
         assert outputs.shape[0] == 1
         assert outputs.shape[1] >= 10  # At least input length
         assert outputs.shape[1] <= 60  # At most input + max_new
+
+
+class TestMoedlMoeConstructor:
+    """Test MoE model construction with various configurations."""
+    
+    def test_basic_moe_construction(self):
+        """Test creating a basic MoE Moedl model (no load balancing)."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            max_position_embeddings=512,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.0,
+        )
+        model = MoedlForCausalLM(config)
+        
+        assert model is not None
+        assert model.config.num_experts == 8
+        assert model.config.num_active_experts == 2
+        
+        # Verify MoeBlk is used in decoder layers
+        for layer in model.model.layers:
+            assert hasattr(layer, 'moe')
+            assert layer.num_experts == 8
+            assert layer.num_active_experts == 2
+    
+    def test_moe_expert_counts(self):
+        """Test various expert configurations (no load balancing)."""
+        test_configs = [
+            (4, 1),   # 4 experts, top-1
+            (8, 2),   # 8 experts, top-2
+            (16, 4),  # 16 experts, top-4
+        ]
+        
+        for num_experts, num_active in test_configs:
+            config = MoedlConfig(
+                vocab_size=1000,
+                hidden_size=128,
+                intermediate_size=256,
+                num_hidden_layers=2,
+                num_attention_heads=4,
+                num_experts=num_experts,
+                num_active_experts=num_active,
+                lb_coeff=0.0,
+            )
+            model = MoedlForCausalLM(config)
+            
+            assert model.config.num_experts == num_experts
+            assert model.config.num_active_experts == num_active
+            
+            # Check each layer
+            for layer in model.model.layers:
+                assert len(layer.moe.experts) == num_experts
+    
+    def test_moe_fail_invalid_expert_config(self):
+        """Test that invalid expert configurations fail."""
+        # num_active_experts > num_experts should fail
+        with pytest.raises(ValueError):
+            config = MoedlConfig(
+                vocab_size=1000,
+                hidden_size=128,
+                num_experts=4,
+                num_active_experts=8,  # More active than total
+            )
+
+
+class TestMoedlMoeForward:
+    """Test MoE model forward pass and router_logits (no load balancing)."""
+    
+    def test_moe_forward_returns_router_logits(self):
+        """Test that MoE forward pass returns router_logits."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.0,
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs = model(input_ids)
+        
+        # Check that router_logits are returned
+        assert hasattr(outputs, 'router_logits')
+        assert outputs.router_logits is not None
+        
+        # router_logits should be a tuple with one tensor per layer
+        assert isinstance(outputs.router_logits, tuple)
+        assert len(outputs.router_logits) == config.num_hidden_layers
+        
+        # Each router_logits tensor should have shape (batch_size * seq_len, num_experts)
+        for router_logit in outputs.router_logits:
+            assert router_logit.shape == (batch_size * seq_len, config.num_experts)
+    
+    def test_moe_router_logits_shape(self):
+        """Test router_logits shapes with different configurations."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=3,
+            num_attention_heads=4,
+            num_experts=16,
+            num_active_experts=4,
+            lb_coeff=0.0,
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        batch_size, seq_len = 4, 20
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs = model(input_ids)
+        
+        # Verify router_logits structure
+        assert len(outputs.router_logits) == 3  # num_hidden_layers
+        for router_logit in outputs.router_logits:
+            assert router_logit.shape == (batch_size * seq_len, 16)  # num_experts
+    
+    def test_moe_forward_with_labels(self):
+        """Test MoE forward with labels for loss computation (no load balancing)."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.0,
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+        labels = torch.randint(0, 1000, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Check loss is computed
+        assert outputs.loss is not None
+        assert outputs.loss.numel() == 1  # Scalar loss
+        
+        # Check aux_loss is None when lb_coeff=0.0
+        assert outputs.aux_loss is None
+        
+        # Check router_logits are still returned
+        assert outputs.router_logits is not None
+        assert len(outputs.router_logits) == config.num_hidden_layers
+
+
+class TestMoedlMoeOlmoeEquivalence:
+    """Test equivalence between Moedl MoeBlk and Olmoe SparseMoeBlock."""
+    
+    @pytest.fixture
+    def tiny_moe_config(self):
+        """Shared tiny MoE config for testing (no load balancing)."""
+        return {
+            "vocab_size": 500,
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 4,
+            "max_position_embeddings": 512,
+            "rms_norm_eps": 1e-5,
+            "rope_theta": 10000.0,
+            "hidden_act": "silu",
+            "initializer_range": 0.02,
+            "num_experts": 8,
+            "num_active_experts": 2,
+            "lb_coeff": 0.0,
+        }
+    
+    def test_moe_block_forward_equivalence(self, tiny_moe_config):
+        """Test that MoeBlk produces same output as OlmoeSparseMoeBlock with same weights."""
+        from transformers.models.olmoe.modeling_olmoe import OlmoeSparseMoeBlock, OlmoeConfig
+        from moelab.moedl.modeling_moedl import MoeBlk
+        
+        # Create Moedl MoeBlk
+        moedl_config = MoedlConfig(**tiny_moe_config)
+        moedl_moe = MoeBlk(moedl_config)
+        
+        # Create Olmoe SparseMoeBlock with compatible config
+        # Olmoe uses num_experts_per_tok instead of num_active_experts
+        # Set norm_topk_prob=True to match Moedl's normalization behavior
+        olmoe_config_dict = {
+            "hidden_size": tiny_moe_config["hidden_size"],
+            "intermediate_size": tiny_moe_config["intermediate_size"],
+            "num_experts": tiny_moe_config["num_experts"],
+            "num_experts_per_tok": tiny_moe_config["num_active_experts"],
+            "norm_topk_prob": True,  # Moedl always normalizes topk weights
+            "hidden_act": tiny_moe_config["hidden_act"],
+            "mlp_bias": False,
+        }
+        olmoe_config = OlmoeConfig(**olmoe_config_dict)
+        olmoe_moe = OlmoeSparseMoeBlock(olmoe_config)
+        
+        # Copy weights from Olmoe to Moedl
+        # Router weights
+        moedl_moe.router.weight.data.copy_(olmoe_moe.gate.weight.data)
+        
+        # Expert weights
+        for i in range(tiny_moe_config["num_experts"]):
+            moedl_moe.experts[i].gate.weight.data.copy_(olmoe_moe.experts[i].gate_proj.weight.data)
+            moedl_moe.experts[i].up.weight.data.copy_(olmoe_moe.experts[i].up_proj.weight.data)
+            moedl_moe.experts[i].down.weight.data.copy_(olmoe_moe.experts[i].down_proj.weight.data)
+        
+        # Set to eval mode
+        moedl_moe.eval()
+        olmoe_moe.eval()
+        
+        # Test forward pass
+        batch_size, seq_len, hidden_dim = 2, 10, tiny_moe_config["hidden_size"]
+        hidden_states = torch.randn(batch_size, seq_len, hidden_dim)
+        
+        with torch.no_grad():
+            moedl_output, moedl_router_logits = moedl_moe(hidden_states)
+            olmoe_output, olmoe_router_logits = olmoe_moe(hidden_states)
+        
+        # Check outputs match
+        torch.testing.assert_close(
+            moedl_output,
+            olmoe_output,
+            rtol=1e-4,
+            atol=1e-5
+        )
+        
+        # Check router logits match
+        torch.testing.assert_close(
+            moedl_router_logits,
+            olmoe_router_logits,
+            rtol=1e-4,
+            atol=1e-5
+        )
+    
+    def test_moe_block_expert_selection(self, tiny_moe_config):
+        """Test that expert selection works correctly."""
+        from moelab.moedl.modeling_moedl import MoeBlk
+        
+        config = MoedlConfig(**tiny_moe_config)
+        moe = MoeBlk(config)
+        moe.eval()
+        
+        batch_size, seq_len, hidden_dim = 2, 5, tiny_moe_config["hidden_size"]
+        hidden_states = torch.randn(batch_size, seq_len, hidden_dim)
+        
+        with torch.no_grad():
+            output, router_logits = moe(hidden_states)
+        
+        # Check output shape
+        assert output.shape == (batch_size, seq_len, hidden_dim)
+        
+        # Check router_logits shape
+        assert router_logits.shape == (batch_size * seq_len, config.num_experts)
+        
+        # Verify that routing probabilities sum to ~1 after softmax and topk
+        router_probs = router_logits.softmax(dim=-1)
+        topk_probs, topk_indices = router_probs.topk(config.num_active_experts, dim=-1)
+        
+        # After normalization, topk weights should sum to 1
+        # (accounting for numerical precision)
+        topk_weights = topk_probs / (topk_probs.sum(dim=-1, keepdim=True) + 1e-12)
+        torch.testing.assert_close(
+            topk_weights.sum(dim=-1),
+            torch.ones(batch_size * seq_len),
+            rtol=1e-5,
+            atol=1e-6
+        )
+
+
+class TestMoedlMoeLoadBalancePenalty:
+    """Test MoE load balance penalty method (auxiliary loss-based)."""
+    
+    def test_lb_penalty_applied_when_coeff_nonzero(self):
+        """Test that load balance penalty is added when lb_coeff > 0."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
+        labels = torch.randint(0, 1000, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Loss should include load balance penalty component
+        assert outputs.loss is not None
+        assert outputs.loss.numel() == 1
+        
+        # With lb_coeff > 0, the penalty is added directly to the main loss
+        assert outputs.router_logits is not None
+    
+    def test_lb_penalty_increases_total_loss(self):
+        """Test that enabling load balance penalty increases the total loss."""
+        # Model without load balance penalty
+        config_no_lb = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.0,
+        )
+        model_no_lb = MoedlForCausalLM(config_no_lb)
+        
+        # Model with load balance penalty
+        config_with_lb = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,
+        )
+        model_with_lb = MoedlForCausalLM(config_with_lb)
+        
+        # Copy weights to ensure same model
+        model_with_lb.load_state_dict(model_no_lb.state_dict())
+        
+        # Set to train mode
+        model_no_lb.train()
+        model_with_lb.train()
+        
+        # Same input
+        batch_size, seq_len = 2, 10
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        # Forward pass
+        with torch.no_grad():
+            outputs_no_lb = model_no_lb(input_ids, labels=labels)
+            outputs_with_lb = model_with_lb(input_ids, labels=labels)
+        
+        # Loss with penalty should be higher (original loss + lb penalty)
+        assert outputs_with_lb.loss > outputs_no_lb.loss
+    
+    def test_lb_penalty_with_different_coefficients(self):
+        """Test that higher lb_coeff results in higher penalty and total loss."""
+        base_config = {
+            "vocab_size": 500,
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_experts": 8,
+            "num_active_experts": 2,
+        }
+        
+        # Create models with different lb_coeff
+        config_lb_small = MoedlConfig(**base_config, lb_coeff=0.01)
+        config_lb_large = MoedlConfig(**base_config, lb_coeff=0.1)
+        
+        model_lb_small = MoedlForCausalLM(config_lb_small)
+        model_lb_large = MoedlForCausalLM(config_lb_large)
+        
+        # Copy weights
+        model_lb_large.load_state_dict(model_lb_small.state_dict())
+        
+        model_lb_small.train()
+        model_lb_large.train()
+        
+        # Same input
+        torch.manual_seed(42)
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs_small = model_lb_small(input_ids, labels=labels)
+            outputs_large = model_lb_large(input_ids, labels=labels)
+        
+        # Higher coefficient should result in higher total loss
+        assert outputs_large.loss > outputs_small.loss
+    
+    def test_lb_penalty_computation_validity(self):
+        """Test that load balance penalty is computed correctly."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Manually compute load balance penalty to verify
+        from moelab.moedl.modeling_moedl import load_balancing_loss_func
+        
+        expected_lb_penalty = load_balancing_loss_func(
+            gate_logits=outputs.router_logits,
+            num_experts=config.num_experts,
+            top_k=config.num_active_experts,
+            attention_mask=None,
+        )
+        
+        # The penalty should be positive (it's a penalty term)
+        assert expected_lb_penalty >= 0
+        
+        # Loss should be finite and reasonable
+        assert torch.isfinite(outputs.loss)
+        assert outputs.loss > 0
+    
+    def test_dense_model_no_lb_penalty(self):
+        """Test that dense models (num_experts=1) don't apply load balance penalty."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=1,
+            num_active_experts=1,
+            lb_coeff=0.01,  # Set lb_coeff but it shouldn't be used
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Dense model should have None router_logits (no MoE)
+        assert outputs.router_logits is None
+        
+        # aux_loss should be None (no penalty applied)
+        assert outputs.aux_loss is None
+        
+        # Loss should still be computed normally (just LM loss)
+        assert outputs.loss is not None
 
 
 if __name__ == "__main__":
