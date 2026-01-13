@@ -57,29 +57,25 @@ class DSv3Trainer(MoelabTrainer):
 
         routed_frac_per_k, load_per_expert = self._compute_tokens_per_expert()
 
-        if "wandb" in self.args.report_to:
-            if self.wb_handler is None:
-                self.wb_handler = self.get_wandb_handler()
+        if "wandb" in self.args.report_to and self.wandb is not None:
+            log_dict = {}
 
-            if self.wb_handler is not None:
-                log_dict = {}
+            # Compute and log tokens per expert proportions
+            if routed_frac_per_k is not None:
+                K, E = routed_frac_per_k.shape
+                for k in range(K):
+                    for e in range(E):
+                        log_dict[f"moe/top{k + 1}/e{e}"] = float(routed_frac_per_k[k, e])
 
-                # Compute and log tokens per expert proportions
-                if routed_frac_per_k is not None:
-                    K, E = routed_frac_per_k.shape
-                    for k in range(K):
-                        for e in range(E):
-                            log_dict[f"moe/top{k + 1}/e{e}"] = float(routed_frac_per_k[k, e])
+            # log only the first router's bias to avoid clutter
+            if self.router_modules:
+                bias = next(iter(self.router_modules.values())).e_score_correction_bias
+                bias_list = bias.detach().float().tolist()
+                log_dict.update(
+                    {f"moe/r0_e{e}_bias": float(bias_list[e]) for e in range(len(bias_list))}
+                )
 
-                # log only the first router's bias to avoid clutter
-                if self.router_modules:
-                    bias = next(iter(self.router_modules.values())).e_score_correction_bias
-                    bias_list = bias.detach().float().tolist()
-                    log_dict.update(
-                        {f"moe/r0_e{e}_bias": float(bias_list[e]) for e in range(len(bias_list))}
-                    )
-
-                self.wb_handler.log(log_dict)
+            self.wandb.log(log_dict)
 
         if load_per_expert is not None:
             self.adjust_router_biases(load_per_expert)

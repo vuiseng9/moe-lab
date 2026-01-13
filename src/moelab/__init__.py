@@ -16,7 +16,8 @@ from .olmoe.trainer import OlmoeTrainer
 from .deepseek_v3.register import register_moelab_deepseek_v3, MoelabDeepseekV3Config
 from .deepseek_v3.trainer import DSv3Trainer
 
-from .moedl.register import register_moedl
+from .moedl.register import register_moedl, MoedlConfig
+from moelab.moedl.trainer import MoedlTrainer
 
 register_moelab_olmoe()
 register_moelab_deepseek_v3()
@@ -25,4 +26,5 @@ register_moedl()
 MOELAB_TRAINER_CLS = {
     MoelabDeepseekV3Config.model_type: DSv3Trainer,
     MoelabOlmoeConfig.model_type: OlmoeTrainer,
+    MoedlConfig.model_type: MoedlTrainer,
 }

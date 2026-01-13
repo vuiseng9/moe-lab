@@ -6,7 +6,7 @@ from transformers.modeling_rope_utils import rope_config_validation
 class MoedlConfig(PretrainedConfig):
 
     model_type = "moedl"
-    keys_to_ignore_at_inference = ["past_key_values"]
+    keys_to_ignore_at_inference = ["past_key_values", "aux_loss", "router_logits"]
 
     def __init__(
         self,

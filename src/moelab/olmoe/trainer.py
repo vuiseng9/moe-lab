@@ -9,10 +9,7 @@ class OlmoeTrainer(MoelabTrainer):
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
 
-        if "wandb" in self.args.report_to:
-            if self.wb_handler is None:
-                self.wb_handler = self.get_wandb_handler()
-
+        if "wandb" in self.args.report_to and self.wandb is not None:
             routed_frac_per_k = self.aggregate_routed_frac_per_expert(outputs.router_logits)
 
             log_dict = {
@@ -42,7 +39,7 @@ class OlmoeTrainer(MoelabTrainer):
                 lbloss = outputs.aux_loss.detach().item()
                 log_dict.update({f"train/moe_lbloss": lbloss})
 
-            self.wb_handler.log(log_dict)
+            self.wandb.log(log_dict)
 
         return (loss, outputs) if return_outputs else loss
 
