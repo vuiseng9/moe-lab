@@ -696,6 +696,11 @@ class TestMoedlMoeLoadBalancePenalty:
         
         # With lb_coeff > 0, the penalty is added directly to the main loss
         assert outputs.router_logits is not None
+        
+        # This should be the load balancing loss value (before multiplying by lb_coeff)
+        assert outputs.aux_loss is not None, "aux_loss should be set when lb_coeff > 0 and num_experts > 1"
+        assert torch.isfinite(outputs.aux_loss), "aux_loss should be a finite value"
+        assert outputs.aux_loss >= 0, "aux_loss should be non-negative (it's a penalty term)"
     
     def test_lb_penalty_increases_total_loss(self):
         """Test that enabling load balance penalty increases the total loss."""
@@ -821,6 +826,17 @@ class TestMoedlMoeLoadBalancePenalty:
         # Loss should be finite and reasonable
         assert torch.isfinite(outputs.loss)
         assert outputs.loss > 0
+        
+        # aux_loss should match the computed load balancing penalty (scaled by lb_coeff)
+        assert outputs.aux_loss is not None, "aux_loss should be set when lb_coeff > 0"
+        expected_scaled_penalty = config.lb_coeff * expected_lb_penalty
+        torch.testing.assert_close(
+            outputs.aux_loss, 
+            expected_scaled_penalty,
+            rtol=1e-5,
+            atol=1e-7,
+            msg="aux_loss should equal lb_coeff * load_balancing_penalty"
+        )
     
     def test_dense_model_no_lb_penalty(self):
         """Test that dense models (num_experts=1) don't apply load balance penalty."""

@@ -766,11 +766,12 @@ class MoedlForCausalLM(MoedlPreTrainedModel, GenerationMixin):
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
         lb_loss = None
-        if self.config.num_experts > 1 and self.config.lb_coeff > 0.0:
-            loss += self.config.lb_coeff * load_balancing_loss_func(outputs.router_logits, 
-                                                           num_experts=self.config.num_experts,
-                                                           top_k=self.config.num_active_experts,
-                                                           attention_mask=attention_mask)
+        if self.config.num_experts > 1 and self.config.lb_coeff > 0.0 and loss is not None:
+            lb_loss = self.config.lb_coeff * load_balancing_loss_func(outputs.router_logits, 
+                                                                      num_experts=self.config.num_experts,
+                                                                      top_k=self.config.num_active_experts,
+                                                                      attention_mask=attention_mask)
+            loss += lb_loss
 
         return MoeCausalLMOutputWithPast(
             loss=loss,
