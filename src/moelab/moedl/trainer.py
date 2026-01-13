@@ -44,7 +44,11 @@ class MoedlTrainer(MoelabTrainer):
                 count, _ = self.get_expert_stats(outputs.router_logits)
 
                 # only log top-1 and per model stats for brevity
-                frac_per_e = (count[:, 0, :].sum(dim=0)/num_items_in_batch).tolist()
+                # num_items_in_batch == T distributed among K
+                # since aggregration is per k slot over entire model
+                # model-wide per k attend T * L layers
+                denom = num_items_in_batch * len(outputs.router_logits)
+                frac_per_e = (count[:, 0, :].sum(dim=0)/denom).tolist()
 
                 log_dict = {
                     f"moe/top1/load/e{i:03d}": round(frac, 3) for i, frac in enumerate(frac_per_e)
