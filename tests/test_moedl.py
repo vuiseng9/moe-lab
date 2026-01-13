@@ -666,6 +666,120 @@ class TestMoedlMoeOlmoeEquivalence:
         )
 
 
+class TestMoedlMoeSharedExperts:
+    """Test MoE shared experts functionality."""
+    
+    def test_shared_experts_construction(self):
+        """Test that shared experts are created correctly."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            num_shared_experts=2,
+            lb_coeff=0.0,
+        )
+        model = MoedlForCausalLM(config)
+        
+        # Verify shared experts are created in MoeBlk
+        for layer in model.model.layers:
+            assert hasattr(layer, 'moe')
+            assert hasattr(layer.moe, 'common')
+            assert len(layer.moe.common) == 2
+            assert layer.moe.num_shared_experts == 2
+    
+    def test_no_shared_experts(self):
+        """Test MoE without shared experts (num_shared_experts=0)."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            num_shared_experts=0,
+            lb_coeff=0.0,
+        )
+        model = MoedlForCausalLM(config)
+        
+        # Verify no shared experts created
+        for layer in model.model.layers:
+            assert not hasattr(layer.moe, 'common')
+    
+    def test_shared_experts_affect_output(self):
+        """Test that shared experts change the model output."""
+        base_config = {
+            "vocab_size": 500,
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_experts": 8,
+            "num_active_experts": 2,
+            "lb_coeff": 0.0,
+        }
+        
+        # Model without shared experts
+        config_no_shared = MoedlConfig(**base_config, num_shared_experts=0)
+        model_no_shared = MoedlForCausalLM(config_no_shared)
+        
+        # Model with shared experts
+        config_with_shared = MoedlConfig(**base_config, num_shared_experts=2)
+        model_with_shared = MoedlForCausalLM(config_with_shared)
+        
+        # Copy routed expert weights from no_shared to with_shared
+        for i, layer in enumerate(model_with_shared.model.layers):
+            # Copy router and routed experts
+            layer.moe.router.weight.data.copy_(model_no_shared.model.layers[i].moe.router.weight.data)
+            for j in range(8):
+                layer.moe.experts[j].gate.weight.data.copy_(model_no_shared.model.layers[i].moe.experts[j].gate.weight.data)
+                layer.moe.experts[j].up.weight.data.copy_(model_no_shared.model.layers[i].moe.experts[j].up.weight.data)
+                layer.moe.experts[j].down.weight.data.copy_(model_no_shared.model.layers[i].moe.experts[j].down.weight.data)
+        
+        model_no_shared.eval()
+        model_with_shared.eval()
+        
+        # Same input
+        torch.manual_seed(42)
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs_no_shared = model_no_shared(input_ids)
+            outputs_with_shared = model_with_shared(input_ids)
+        
+        # Outputs should differ (shared experts add their contribution)
+        assert not torch.allclose(outputs_no_shared.logits, outputs_with_shared.logits)
+    
+    def test_dense_model_ignores_shared_experts(self):
+        """Test that dense models force num_shared_experts to 0."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=1,
+            num_active_experts=1,
+            num_shared_experts=2,  # Try to set shared experts for dense
+            lb_coeff=0.0,
+        )
+        
+        # Config should force num_shared_experts to 0 for dense
+        assert config.num_shared_experts == 0
+        
+        model = MoedlForCausalLM(config)
+        
+        # Verify layers use MLP, not MoeBlk
+        for layer in model.model.layers:
+            assert hasattr(layer, 'mlp')
+            assert not hasattr(layer, 'moe')
+
+
 class TestMoedlMoeLoadBalancePenalty:
     """Test MoE load balance penalty method (auxiliary loss-based)."""
     

@@ -147,14 +147,18 @@ class MoeBlk(nn.Module):
         super().__init__()
         self.num_experts = config.num_experts
         self.num_active_experts = config.num_active_experts
+        self.num_shared_experts = config.num_shared_experts
 
         self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
         self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
-
+        if self.num_shared_experts > 0:
+            self.common = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_shared_experts)])
+    
     def extra_repr(self):
-        K = self.num_active_experts
-        E = self.num_experts
-        return f"[K:E] = {K}:{E}, sparsity: {K/E*100:.2f}%"
+        K  = self.num_active_experts
+        E  = self.num_experts
+        ES = self.num_shared_experts
+        return f"[K:E|ES] = {K}:{E}|{ES}, sparsity: {K/E*100:.2f}%"
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         x = hidden_states
@@ -189,8 +193,7 @@ class MoeBlk(nn.Module):
         # accumulation save buffer space.
         moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
 
-        # loop over experts, 
-        # 
+        # loop over experts
         for eid in range(E):
             # tok_ids: indices of tokens to be attended by expert eid 
             # which_k: for each token, which k slot it is from 0 to K 
@@ -203,6 +206,11 @@ class MoeBlk(nn.Module):
 
             # forward pass, output accumulate back to moe_outputs
             moe_outputs[tok_ids, :] += expert(tokens) * weights
+
+        # loop over shared experts
+        for sid in range(self.num_shared_experts):
+            # all tokens go to shared experts
+            moe_outputs += self.common[sid](_x)
 
         return moe_outputs.view(B, L, D), router_logits 
 

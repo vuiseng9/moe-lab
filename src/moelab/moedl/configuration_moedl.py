@@ -35,6 +35,7 @@ class MoedlConfig(PretrainedConfig):
         # MoE specific
         num_experts=16,
         num_active_experts=4,
+        num_shared_experts=0,
         lb_coeff=0.01,
         **kwargs,
     ):
@@ -63,16 +64,27 @@ class MoedlConfig(PretrainedConfig):
         self.head_dim = head_dim if head_dim is not None else self.hidden_size // self.num_attention_heads
         
         # MoE specific
-        if num_experts <= 0 or num_active_experts <= 0:
-            raise ValueError("num_experts and num_active_experts must be positive integers.")
+        if num_experts <= 0 or num_active_experts <= 0 or num_shared_experts < 0:
+            raise ValueError("num_experts and num_active_experts must be non-zero positive integers, and "
+                             "num_shared_experts must be a non-negative integer.")
         elif num_experts > 1:
             self.num_experts = num_experts
             if num_active_experts > num_experts:
                 raise ValueError("num_active_experts cannot be greater than num_experts.")
             self.num_active_experts = num_active_experts
+            self.num_shared_experts = num_shared_experts
         else:
+            # dense MLP
+            # while shared expert semantically closer to dense MLP,
+            # we use num_experts = 1 and num_active_experts = 1 to represent dense MLP
+            # we totally ignore num_shared_experts for dense, forcing it to be 0
             self.num_experts = 1  # Disable MoE when num_experts is set to 1
             self.num_active_experts = 1         
+            self.num_shared_experts = 0
+
+        if self.num_experts > 1:
+            if num_shared_experts < 0:
+                raise ValueError("num_shared_experts must be a non-negative integer less than num_experts.")
 
         if lb_coeff < 0.0:
             raise ValueError("lb_coeff must be a non-negative float.")
