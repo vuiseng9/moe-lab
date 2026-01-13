@@ -148,17 +148,28 @@ class MoeBlk(nn.Module):
         self.num_experts = config.num_experts
         self.num_active_experts = config.num_active_experts
         self.num_shared_experts = config.num_shared_experts
+        self.lb_coeff = config.lb_coeff
+        self.lb_gamma = config.lb_gamma
 
         self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
         self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
         if self.num_shared_experts > 0:
             self.common = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_shared_experts)])
     
+        if self.lb_coeff > 0.0 and self.lb_gamma > 0.0:
+            raise NotImplementedError("Currently, load balance strategy via (1) penalty (2) biasing are mutually exclusive."
+                                      "Either lb_coeff or lb_gamma can be set to non-zero, but not both. Maybe supported in future.")
+
+        if self.lb_gamma > 0.0:
+            self.register_buffer("e_score_bias", torch.zeros((1, self.num_experts)))
+
     def extra_repr(self):
         K  = self.num_active_experts
         E  = self.num_experts
         ES = self.num_shared_experts
-        return f"[K:E|ES] = {K}:{E}|{ES}, sparsity: {K/E*100:.2f}%"
+        return f"[K:E|ES] = {K}:{E}|{ES}, " \
+               f"lb_coeff={self.lb_coeff}, lb_gamma={self.lb_gamma}\n" \
+               f"sparsity: {(K+ES)/(E+ES)*100:.2f}% (K+ES)/(E+ES)" \
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         x = hidden_states
@@ -177,15 +188,31 @@ class MoeBlk(nn.Module):
 
         _x = x.view(T, D) # all tokens in a single list (dimension) 
         
-        # router: predict logits over all experts 
-        # Top-K expert selection post softmax normalization
-        # element value of k_weights is the softmax-normalized score
-        # element value of k_ids is in [0, E-1], the eid 
-        # renormalize k-expert weights among themselves
-        router_logits = self.router(_x) # (T, E)
-        router_scores = router_logits.softmax(dim=-1) 
-        k_weights, k_ids = router_scores.topk(K, dim=-1)  
-        k_weights = k_weights / ( k_weights.sum(dim=-1, keepdim=True) + eps ) 
+        # for readibility, make routing strategy loop explicit (instead of many if) 
+        if self.lb_gamma > 0.0:
+            router_logits = self.router(_x) # (T, E)
+            router_scores = router_logits.sigmoid()
+            # By design, biased scores only affect expert selection,
+            # weights of selected experts are still from sigmoid-ed scores.
+            biased_scores = router_scores + self.e_score_bias
+            _, k_ids = torch.topk(biased_scores, K, dim=-1)
+            k_weights = torch.gather(router_scores, dim=-1, index=k_ids) 
+            k_weights = k_weights / ( k_weights.sum(dim=-1, keepdim=True) + eps )
+            # TODO: this is brittle, need better design
+            #       hijack router_logits given the fact that it is used expert stats
+            router_logits = biased_scores
+        else:
+            # NOTE: even when self.lb_coeff == 0.0, we still do top-k routing,
+            #       just no loss penalty applied. it also mean default routing path here.
+            # router: predict logits over all experts 
+            # Top-K expert selection post softmax normalization
+            # element value of k_weights is the softmax-normalized score
+            # element value of k_ids is in [0, E-1], the eid 
+            # renormalize k-expert weights among themselves
+            router_logits = self.router(_x) # (T, E)
+            router_scores = router_logits.softmax(dim=-1) 
+            k_weights, k_ids = router_scores.topk(K, dim=-1)  
+            k_weights = k_weights / ( k_weights.sum(dim=-1, keepdim=True) + eps ) 
 
         # == Expert Computation and Accumulation ==
         # initialize output buffer, per token, output dimension

@@ -509,5 +509,329 @@ class TestMoedlTrainerIntegration:
         assert outputs is not None
 
 
+class TestMoedlTrainerBiasAdjustment:
+    """Test bias adjustment behavior in MoedlTrainer (lb_gamma mechanism)."""
+    
+    @pytest.fixture
+    def moe_config_with_biasing(self):
+        """Config for MoE with biasing enabled."""
+        return MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,  # Biasing enabled
+        )
+    
+    @pytest.fixture
+    def moe_config_no_biasing(self):
+        """Config for MoE without biasing."""
+        return MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.0,  # Biasing disabled
+        )
+    
+    def test_bias_untouched_when_lb_gamma_zero(self, moe_config_no_biasing, training_args, tiny_dataset):
+        """Test that biases are NOT modified when lb_gamma=0."""
+        model = MoedlForCausalLM(moe_config_no_biasing)
+        
+        # Note: when lb_gamma=0, no e_score_bias buffer is created
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Verify no e_score_bias buffers exist
+        for name, module in model.named_modules():
+            assert not hasattr(module, 'e_score_bias'), \
+                f"Module {name} should not have e_score_bias when lb_gamma=0"
+        
+        # Training should work without errors
+        trainer.train()
+    
+    def test_bias_touched_when_lb_gamma_nonzero(self, moe_config_with_biasing, tiny_dataset):
+        """Test that biases ARE modified when lb_gamma>0."""
+        model = MoedlForCausalLM(moe_config_with_biasing)
+        
+        # Record initial bias values
+        initial_biases = {}
+        for name, module in model.named_modules():
+            if hasattr(module, 'e_score_bias'):
+                initial_biases[name] = module.e_score_bias.clone()
+        
+        assert len(initial_biases) > 0, "Should have e_score_bias buffers when lb_gamma > 0"
+        
+        # Need wandb to enable bias adjustment
+        training_args = TrainingArguments(
+            output_dir="/tmp/test_moedl_bias",
+            per_device_train_batch_size=2,
+            max_steps=2,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Train for one step
+        trainer.train()
+        
+        # Verify at least some biases changed (move initial to same device for comparison)
+        bias_changed = False
+        for name, module in model.named_modules():
+            if hasattr(module, 'e_score_bias'):
+                initial = initial_biases[name].to(module.e_score_bias.device)
+                if not torch.allclose(module.e_score_bias, initial):
+                    bias_changed = True
+                    break
+        
+        assert bias_changed, "At least some biases should change when lb_gamma > 0"
+    
+    def test_bias_untouched_when_using_lb_coeff(self, training_args, tiny_dataset):
+        """Test that biases are NOT created/modified when using lb_coeff (penalty method)."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,  # Penalty method
+            lb_gamma=0.0,    # Biasing disabled
+        )
+        model = MoedlForCausalLM(config)
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Verify no e_score_bias buffers exist
+        for name, module in model.named_modules():
+            assert not hasattr(module, 'e_score_bias'), \
+                f"Module {name} should not have e_score_bias when using lb_coeff"
+        
+        # Should train without errors
+        trainer.train()
+    
+    def test_bias_adjustment_direction(self, tiny_dataset):
+        """Test that bias adjustment reduces load imbalance."""
+        # Use stronger gamma for clearer signal
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.1,  # Strong biasing
+        )
+        model = MoedlForCausalLM(config)
+        
+        # Manually bias expert 0 to be heavily favored
+        for module in model.modules():
+            if hasattr(module, 'e_score_bias'):
+                module.e_score_bias[0, 0] = 5.0  # Heavily favor expert 0
+        
+        # Need wandb to enable bias adjustment
+        training_args = TrainingArguments(
+            output_dir="/tmp/test_moedl_bias",
+            per_device_train_batch_size=2,
+            max_steps=2,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Get initial bias for expert 0
+        initial_bias_e0 = None
+        for module in model.modules():
+            if hasattr(module, 'e_score_bias'):
+                initial_bias_e0 = module.e_score_bias[0, 0].item()
+                break
+        
+        # Train - expert 0 will be overloaded, bias should decrease
+        trainer.train()
+        
+        # Check bias for expert 0 decreased
+        final_bias_e0 = None
+        for module in model.modules():
+            if hasattr(module, 'e_score_bias'):
+                final_bias_e0 = module.e_score_bias[0, 0].item()
+                break
+        
+        assert final_bias_e0 < initial_bias_e0, \
+            f"Bias for overloaded expert should decrease (was {initial_bias_e0}, now {final_bias_e0})"
+    
+    def test_adjust_balancing_biases_computation(self, moe_config_with_biasing):
+        """Test the bias adjustment computation logic directly."""
+        model = MoedlForCausalLM(moe_config_with_biasing)
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=TrainingArguments(output_dir="/tmp", max_steps=1, report_to=[]),
+            train_dataset=Dataset.from_dict({"input_ids": [[1, 2]], "labels": [[1, 2]]}),
+        )
+        
+        # Create mock load per expert: layer 0 heavily loaded on expert 0
+        # Shape: (num_layers, num_experts)
+        E = moe_config_with_biasing.num_experts
+        
+        # Get device from model
+        device = next(model.parameters()).device
+        
+        load_per_expert = torch.zeros((2, E), device=device)
+        load_per_expert[0, 0] = 0.5  # Layer 0: expert 0 overloaded (50% vs ideal 12.5% for 8 experts)
+        load_per_expert[0, 1:] = 0.5 / (E - 1)  # Distribute rest evenly
+        load_per_expert[1, :] = 1.0 / E  # Layer 1: perfectly balanced
+        
+        # Record initial biases
+        initial_biases = {}
+        for name, module in trainer.moe_modules.items():
+            initial_biases[name] = module.e_score_bias.clone()
+        
+        # Apply adjustment
+        global_bias_sum = trainer.adjust_balancing_biases(load_per_expert)
+        
+        # Check that layer 0's expert 0 bias decreased
+        layer_0_module = list(trainer.moe_modules.values())[0]
+        assert layer_0_module.e_score_bias[0, 0] < initial_biases[list(trainer.moe_modules.keys())[0]][0, 0], \
+            "Overloaded expert's bias should decrease"
+        
+        # Check that layer 1's biases changed minimally (already balanced)
+        layer_1_module = list(trainer.moe_modules.values())[1]
+        max_change = (layer_1_module.e_score_bias - initial_biases[list(trainer.moe_modules.keys())[1]]).abs().max()
+        assert max_change < 0.02, "Balanced layer should have minimal bias changes"
+    
+    def test_get_expert_stats_with_biasing(self, moe_config_with_biasing, training_args, tiny_dataset):
+        """Test that get_expert_stats works correctly with biasing enabled."""
+        model = MoedlForCausalLM(moe_config_with_biasing)
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Do a forward pass
+        batch = tiny_dataset[:2]
+        input_ids = torch.tensor(batch["input_ids"])
+        
+        with torch.no_grad():
+            outputs = model(input_ids)
+        
+        # Get stats
+        count, frac = trainer.get_expert_stats(outputs.router_logits)
+        
+        # Verify shapes
+        L = moe_config_with_biasing.num_hidden_layers
+        K = moe_config_with_biasing.num_active_experts
+        E = moe_config_with_biasing.num_experts
+        
+        assert count.shape == (L, K, E), f"count shape should be (L, K, E), got {count.shape}"
+        assert frac.shape == (L, K, E), f"frac shape should be (L, K, E), got {frac.shape}"
+        
+        # Verify frac sums to 1.0 per (layer, k) slot
+        frac_sums = frac.sum(dim=-1)
+        torch.testing.assert_close(
+            frac_sums,
+            torch.ones_like(frac_sums),
+            rtol=1e-5,
+            atol=1e-5,
+            msg="Fraction per (layer, k) slot should sum to 1.0"
+        )
+    
+    def test_dense_model_no_bias_adjustment(self, dense_model_config, training_args, tiny_dataset):
+        """Test that dense models don't have bias adjustment logic."""
+        model = MoedlForCausalLM(dense_model_config)
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Verify trainer recognizes this is not MoE
+        assert not trainer.is_moe, "Dense model should not be recognized as MoE"
+        assert trainer.moe_modules is None or len(trainer.moe_modules) == 0, \
+            "Dense model should have no MoE modules"
+        
+        # Training should work without issues
+        trainer.train()
+    
+    def test_wandb_logging_with_biasing(self, moe_config_with_biasing, tmp_path, tiny_dataset):
+        """Test wandb logging includes lb_bias_global_sum when biasing is enabled."""
+        model = MoedlForCausalLM(moe_config_with_biasing)
+        
+        # Mock wandb object
+        mock_wandb = Mock()
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Inject mock wandb directly through _wb_handler
+        trainer._wb_handler = mock_wandb
+        
+        # Get device from model
+        device = next(model.parameters()).device
+        
+        # Perform training step
+        batch = {
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
+        }
+        
+        loss, outputs = trainer.compute_loss(
+            model, batch, num_items_in_batch=2, return_outputs=True
+        )
+        
+        # Verify wandb logging was called
+        mock_wandb.log.assert_called()
+        log_dict = mock_wandb.log.call_args[0][0]
+        
+        # Should have lb_bias_global_sum
+        assert "moe/lb_bias_global_sum" in log_dict, "Should log lb_bias_global_sum when lb_gamma > 0"
+        
+        # lb_loss should be NaN (not using penalty method)
+        assert "train/lb_loss" in log_dict
+        import math
+        assert math.isnan(log_dict["train/lb_loss"]), "lb_loss should be NaN when not using penalty method"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
