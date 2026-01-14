@@ -16,8 +16,11 @@ class MoedlTrainer(MoelabTrainer):
         if not getattr(self._cfg, "num_experts", None):
             raise ValueError("Moedl config must have 'num_experts' attribute to determine MoE status.")
         
-        self.E = self._cfg.num_experts
-        self.K = self._cfg.num_active_experts
+        self.L  = self._cfg.num_hidden_layers
+        self.E  = self._cfg.num_experts
+        self.K  = self._cfg.num_active_experts
+        self.ES = self._cfg.num_shared_experts
+        self.CF = self._cfg.capacity_factor
         self._is_moe = self.E > 1
 
         self.moe_modules = None
@@ -74,6 +77,16 @@ class MoedlTrainer(MoelabTrainer):
                 else:
                     lb_bias_global_sum = math.nan
                 log_dict.update({f"moe/lb_bias_global_sum": lb_bias_global_sum})
+
+                drop_ratio = math.nan
+                if self.CF > 0:
+                    global_n_drop = sum([m.n_drop for m in self.moe_modules.values()])
+                    # global_n_experts = self.E * self.L
+                    # n_drop_per_e = global_n_drop / global_n_experts
+
+                    global_n_routes = int(num_items_in_batch * self.L * self.K)
+                    drop_ratio = round(global_n_drop / global_n_routes, 4)
+                log_dict.update({f"train/token_drop_ratio": drop_ratio})
 
                 self.wandb.log(log_dict)
 

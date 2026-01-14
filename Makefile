@@ -99,3 +99,17 @@ c3_moedl_s2_k2_e30:
 c4_moedl_s3_k1_e29:
 	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=3 lr=8e-4
 
+
+_ablate-token-drop:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides capacity_factor=$(CF),lb_coeff=0.01,num_experts=8,num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+d1_moedl_cf_1.0:
+	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=1.0 lr=8e-4
+d2_moedl_cf_1.5:
+	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=1.5 lr=8e-4
+d3_moedl_cf_2.0:
+	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=2.0 lr=8e-4
+d4_moedl_cf_2.5:
+	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=2.5 lr=8e-4

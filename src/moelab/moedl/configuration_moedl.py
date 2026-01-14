@@ -38,6 +38,7 @@ class MoedlConfig(PretrainedConfig):
         num_shared_experts=0,
         lb_coeff=0.0,
         lb_gamma=0.0,
+        capacity_factor=0.0,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -72,8 +73,6 @@ class MoedlConfig(PretrainedConfig):
             self.num_experts = num_experts
             if num_active_experts > num_experts:
                 raise ValueError("num_active_experts cannot be greater than num_experts.")
-            if num_shared_experts < 0:
-                raise ValueError("num_shared_experts must be a non-negative integer less than num_experts.")
             if lb_coeff < 0.0:
                 raise ValueError("lb_coeff must be a non-negative float.")
             if lb_gamma < 0.0:
@@ -81,11 +80,13 @@ class MoedlConfig(PretrainedConfig):
             if lb_coeff > 0.0 and lb_gamma > 0.0:
                 raise NotImplementedError("Currently, load balance strategy via (1) penalty (2) biasing are mutually exclusive."
                                           "Either lb_coeff or lb_gamma can be set to non-zero, but not both. Maybe supported in future.")
-
+            if capacity_factor < 0.0:
+                raise ValueError("capacity_factor must be a non-negative float. Set to 0.0 to disable capacity limit.")
             self.num_active_experts = num_active_experts
             self.num_shared_experts = num_shared_experts
             self.lb_coeff = lb_coeff
             self.lb_gamma = lb_gamma
+            self.capacity_factor = capacity_factor
         else:
             # dense MLP
             # while shared expert semantically closer to dense MLP,
@@ -96,6 +97,7 @@ class MoedlConfig(PretrainedConfig):
             self.num_shared_experts = 0
             self.lb_coeff = 0.0  
             self.lb_gamma = 0.0
+            self.capacity_factor = 0.0
 
         # Validate the correctness of rotary position embeddings parameters
         # BC: if there is a 'type' field, copy it it to 'rope_type'.

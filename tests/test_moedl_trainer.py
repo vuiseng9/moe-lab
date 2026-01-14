@@ -833,5 +833,274 @@ class TestMoedlTrainerBiasAdjustment:
         assert math.isnan(log_dict["train/lb_loss"]), "lb_loss should be NaN when not using penalty method"
 
 
+class TestMoedlTrainerCapacityFactor:
+    """Test trainer behavior with capacity factor (token dropping)."""
+    
+    @pytest.fixture
+    def moe_config_with_capacity(self):
+        """Config for MoE with capacity limiting enabled."""
+        return MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=1.0,
+        )
+    
+    def test_capacity_logging_disabled_when_cf_zero(self, moe_model_config, tmp_path, tiny_dataset):
+        """Test that token_drop_ratio is NaN when capacity_factor=0."""
+        model = MoedlForCausalLM(moe_model_config)
+        
+        mock_wandb = Mock()
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        trainer._wb_handler = mock_wandb
+        
+        device = next(model.parameters()).device
+        batch = {
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
+        }
+        
+        loss, outputs = trainer.compute_loss(
+            model, batch, num_items_in_batch=2, return_outputs=True
+        )
+        
+        mock_wandb.log.assert_called()
+        log_dict = mock_wandb.log.call_args[0][0]
+        
+        assert "train/token_drop_ratio" in log_dict
+        import math
+        assert math.isnan(log_dict["train/token_drop_ratio"]), \
+            "token_drop_ratio should be NaN when capacity_factor=0"
+    
+    def test_capacity_logging_enabled_when_cf_nonzero(self, moe_config_with_capacity, tmp_path, tiny_dataset):
+        """Test that token_drop_ratio is logged when capacity_factor>0."""
+        model = MoedlForCausalLM(moe_config_with_capacity)
+        
+        mock_wandb = Mock()
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        trainer._wb_handler = mock_wandb
+        
+        device = next(model.parameters()).device
+        batch = {
+            "input_ids": torch.randint(0, 1000, (2, 10), device=device),
+            "labels": torch.randint(0, 1000, (2, 10), device=device),
+        }
+        
+        loss, outputs = trainer.compute_loss(
+            model, batch, num_items_in_batch=2, return_outputs=True
+        )
+        
+        mock_wandb.log.assert_called()
+        log_dict = mock_wandb.log.call_args[0][0]
+        
+        assert "train/token_drop_ratio" in log_dict
+        # Should be a valid number (not NaN)
+        import math
+        assert not math.isnan(log_dict["train/token_drop_ratio"]), \
+            "token_drop_ratio should be a number when capacity_factor>0"
+        assert log_dict["train/token_drop_ratio"] >= 0.0, \
+            "token_drop_ratio should be non-negative"
+    
+    def test_capacity_n_drop_counter_updates(self, moe_config_with_capacity, tiny_dataset):
+        """Test that n_drop counters are tracked per layer."""
+        model = MoedlForCausalLM(moe_config_with_capacity)
+        
+        training_args = TrainingArguments(
+            output_dir="/tmp",
+            per_device_train_batch_size=2,
+            max_steps=1,
+            report_to=[],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Check n_drop exists and is accessible
+        assert trainer.moe_modules is not None
+        for module in trainer.moe_modules.values():
+            assert hasattr(module, 'n_drop')
+            assert module.n_drop >= 0  # Non-negative
+    
+    def test_capacity_dense_model_no_drops(self, dense_model_config, tmp_path, tiny_dataset):
+        """Test that dense models don't log token drops."""
+        model = MoedlForCausalLM(dense_model_config)
+        
+        mock_wandb = Mock()
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        trainer._wb_handler = mock_wandb
+        
+        device = next(model.parameters()).device
+        batch = {
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
+        }
+        
+        loss = trainer.compute_loss(model, batch, num_items_in_batch=2)
+        
+        # Dense model shouldn't call wandb logging
+        mock_wandb.log.assert_not_called()
+    
+    def test_capacity_with_lb_coeff(self, tmp_path, tiny_dataset):
+        """Test capacity_factor logging with lb_coeff load balancing."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=1.0,
+            lb_coeff=0.01,  # Traditional load balancing
+        )
+        model = MoedlForCausalLM(config)
+        
+        mock_wandb = Mock()
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        trainer._wb_handler = mock_wandb
+        
+        device = next(model.parameters()).device
+        batch = {
+            "input_ids": torch.randint(0, 1000, (2, 10), device=device),
+            "labels": torch.randint(0, 1000, (2, 10), device=device),
+        }
+        
+        loss, outputs = trainer.compute_loss(
+            model, batch, num_items_in_batch=2, return_outputs=True
+        )
+        
+        mock_wandb.log.assert_called()
+        log_dict = mock_wandb.log.call_args[0][0]
+        
+        # Should log both token_drop_ratio and load balancing metrics
+        assert "train/token_drop_ratio" in log_dict
+        assert "train/lb_loss" in log_dict
+        import math
+        assert not math.isnan(log_dict["train/token_drop_ratio"])
+        assert not math.isnan(log_dict["train/lb_loss"])
+        assert log_dict["train/lb_loss"] >= 0.0
+    
+    def test_capacity_with_lb_gamma(self, tmp_path, tiny_dataset):
+        """Test capacity_factor logging with lb_gamma load balancing."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=1.0,
+            lb_gamma=0.01,  # Score bias load balancing
+        )
+        model = MoedlForCausalLM(config)
+        
+        mock_wandb = Mock()
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        trainer._wb_handler = mock_wandb
+        
+        device = next(model.parameters()).device
+        batch = {
+            "input_ids": torch.randint(0, 1000, (2, 10), device=device),
+            "labels": torch.randint(0, 1000, (2, 10), device=device),
+        }
+        
+        loss, outputs = trainer.compute_loss(
+            model, batch, num_items_in_batch=2, return_outputs=True
+        )
+        
+        mock_wandb.log.assert_called()
+        log_dict = mock_wandb.log.call_args[0][0]
+        
+        # Should log both token_drop_ratio and bias adjustment metrics
+        assert "train/token_drop_ratio" in log_dict
+        assert "moe/lb_bias_global_sum" in log_dict
+        import math
+        assert not math.isnan(log_dict["train/token_drop_ratio"])
+        assert not math.isnan(log_dict["moe/lb_bias_global_sum"])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
