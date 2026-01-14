@@ -6,7 +6,7 @@ gpulist ?= 0
 extra_args ?=
 postfix ?= r1
 
-# design notes:
+# Design:
 # 1. Not checking variables like lr, runlabel, gamma, enable_lb 
 #	 to avoid too much codes. they fail anyway, 
 #	 just set them during make <target> lr=4e-3 ...
@@ -16,14 +16,33 @@ postfix ?= r1
 # 	 a seperated wandb project is expected for sweep runs
 # 	 to avoid many runs in the main project.
 # 3. postfix=<text> make run will additional label, 
-# 	 can be used to distinguish different runs, default r0.
+# 	 can be used to distinguish different runs, default above.
+# 4. gpulist-check-busy target checks if the specified gpus
+#    are busy. If busy, exit with error message.
+#    User can override this check with force=1.
+#    My own experience, tend to forget to set gpulist
+#    and cause overlapping jobs on same GPU.
 
 ifeq ($(sweep_lr),1)
 WANDB_PROJECT := $(WANDB_PROJECT)-sweeplr
 extra_args += --sweep_lr 1e-3,3e-3,5e-3,8e-3,1e-4,3e-4,5e-4,8e-4,1e-5,3e-5,5e-5,8e-5 --sweep_lr_steps 150 --warmup_steps 30
 endif
 
-__pretrain-tinystories:
+gpulist-check-busy:
+ifeq ($(force),1)
+	@echo "No gpulist-check-busy (force=1)"
+else
+	@pids=$$(nvidia-smi --query-compute-apps=pid --format=csv,noheader -i $(gpulist) 2>&1); \
+	if echo "$$pids" | grep -qi "no devices\|invalid\|unable"; then \
+		echo "\n\n[Error]: Invalid id(s) in gpulist=$(gpulist). Please revise gpulist=..."; \
+		exit 1; \
+	elif [ -n "$$pids" ]; then \
+		echo "\n\n[Error]: Active job(s) found on gpulist=$(gpulist). Please revise gpulist=... or use force=1"; \
+		exit 1; \
+	fi
+endif
+
+__pretrain-tinystories: gpulist-check-busy
 	mkdir -p $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) && \
 	WANDB_PROJECT=$(WANDB_PROJECT) \
 	CUDA_VISIBLE_DEVICES=$(gpulist) python moelab_main.py \
