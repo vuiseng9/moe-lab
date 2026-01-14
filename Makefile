@@ -2,9 +2,9 @@
 
 WANDB_PROJECT ?= moe-lab
 OUTROOT ?= /root/work/run
-CUDADEV ?= 0
+gpulist ?= 0
 extra_args ?=
-postfix ?= r0
+postfix ?= r1
 
 # design notes:
 # 1. Not checking variables like lr, runlabel, gamma, enable_lb 
@@ -26,7 +26,7 @@ endif
 __pretrain-tinystories:
 	mkdir -p $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) && \
 	WANDB_PROJECT=$(WANDB_PROJECT) \
-	CUDA_VISIBLE_DEVICES=$(CUDADEV) python moelab_main.py \
+	CUDA_VISIBLE_DEVICES=$(gpulist) python moelab_main.py \
 		$(model_cfg) \
 		--dataset_name roneneldan/TinyStories --block_size 512 \
 		--learning_rate $(lr) --num_train_epochs 2 \
@@ -40,93 +40,62 @@ __pretrain-tinystories:
 		--output_dir $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) \
 		$(extra_args)
 
-_olmoe-ts: 
-	$(MAKE) __pretrain-tinystories \
-	model_cfg="--model_type moelab_olmoe \
-		--config_overrides num_hidden_layers=8,hidden_size=256,num_attention_heads=8,num_key_value_heads=8,intermediate_size=128,num_experts=8,num_experts_per_tok=1,enable_lbloss=$(enable_lb) \
-		--tokenizer_name allenai/OLMoE-1B-7B-0125"
-
-_deepseekv3-ts:
-	$(MAKE) __pretrain-tinystories \
-	model_cfg="--model_type moelab_deepseek_v3 \
-		--config_overrides num_hidden_layers=8,hidden_size=256,q_lora_rank=128,kv_lora_rank=128,qk_rope_head_dim=16,qk_nope_head_dim=16,qk_head_dim=32,head_dim=16,v_head_dim=32,num_attention_heads=8,num_key_value_heads=8,first_k_dense_replace=0,moe_intermediate_size=128,n_shared_experts=0,n_routed_experts=8,num_experts_per_tok=1,n_group=1,topk_group=1,load_balance_gamma=$(gamma) \
-		--tokenizer_name allenai/OLMoE-1B-7B-0125" \
-
 _llama2-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type llama \
-		--config_overrides hidden_size=256,num_hidden_layers=8,num_attention_heads=8,num_key_value_heads=8,head_dim=32,intermediate_size=1024 \
+		--config_overrides hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
+00-llama2_ref:
+	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
 
 _moedl-dense-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
-		--config_overrides num_experts=1,num_active_experts=1,hidden_size=256,num_hidden_layers=8,num_attention_heads=8,num_key_value_heads=8,head_dim=32,intermediate_size=1024 \
+		--config_overrides num_experts=1,num_active_experts=1,hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
-
-_moedl-moe-ts:
-	$(MAKE) __pretrain-tinystories \
-	model_cfg="--model_type moedl \
-		--config_overrides lb_coeff=$(lb_coeff),num_experts=8,num_active_experts=1,hidden_size=256,num_hidden_layers=8,num_attention_heads=8,num_key_value_heads=8,head_dim=32,intermediate_size=256 \
-		--tokenizer_name meta-llama/Llama-2-7b-hf"
-
-llama2_25M:
-	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
-
-moedl_dense_25M:
+01-moedl_dense:
 	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=1e-3
 
-olmoe_no_lb:
-	$(MAKE) _olmoe-ts runlabel=$@-$(postfix) enable_lb=false lr=1e-3 
 
-moedl_no_lb:
-	$(MAKE) _moedl-moe-ts runlabel=$@-$(postfix) lb_coeff=0.00 lr=1e-3
-
-moedl_with_lb:
-	$(MAKE) _moedl-moe-ts runlabel=$@-$(postfix) lb_coeff=0.01 lr=1e-3
-
-olmoe_lb_penalty:
-	$(MAKE) _olmoe-ts runlabel=$@-$(postfix) enable_lb=true lr=1e-3
-
-_olmoe-ts-mixture-resolution:
+_ablate-load-balance:
 	$(MAKE) __pretrain-tinystories \
-	model_cfg="--model_type moelab_olmoe \
-		--config_overrides num_experts=$(E),num_experts_per_tok=$(K),intermediate_size=$(Dff),num_hidden_layers=8,hidden_size=256,num_attention_heads=8,num_key_value_heads=8,enable_lbloss=true \
-		--tokenizer_name allenai/OLMoE-1B-7B-0125"
-
-olmoe-e16-k2:
-	$(MAKE) _olmoe-ts-mixture-resolution runlabel=$@-$(postfix) E=16 K=2 Dff=64 lr=1e-3
-
-olmoe-e32-k4:
-	$(MAKE) _olmoe-ts-mixture-resolution runlabel=$@-$(postfix) E=32 K=4 Dff=32 lr=1e-3
-
-olmoe-e64-k8:
-	$(MAKE) _olmoe-ts-mixture-resolution runlabel=$@-$(postfix) E=64 K=8 Dff=16 lr=1e-3
-
-dsv3_no_lb:
-	$(MAKE) _deepseekv3-ts runlabel=$@-$(postfix) gamma=0.0 lr=8e-4
-
-dsv3_lb_bias:
-	$(MAKE) _deepseekv3-ts runlabel=$@-$(postfix) gamma=0.01 lr=8e-4
+	model_cfg="--model_type moedl \
+		--config_overrides lb_coeff=$(coeff),lb_gamma=$(gamma),num_experts=8,num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+a0_moedl_no_lb:
+	$(MAKE) _ablate-load-balance runlabel=$@-$(postfix) coeff=0.0 gamma=0.0 lr=8e-4
+a1_moedl_lb_penalty:
+	$(MAKE) _ablate-load-balance runlabel=$@-$(postfix) coeff=0.01 gamma=0.00 lr=8e-4
+a2_moedl_lb_biasing:
+	$(MAKE) _ablate-load-balance runlabel=$@-$(postfix) coeff=0.00 gamma=0.01 lr=8e-4
 
 
-_olmoe-e16-k2-tokdrop:
+_ablate-moe-resolution:
 	$(MAKE) __pretrain-tinystories \
-	model_cfg="--model_type moelab_olmoe \
-		--config_overrides capacity_factor=$(CF),num_experts=16,num_experts_per_tok=2,intermediate_size=64,num_hidden_layers=8,hidden_size=256,num_attention_heads=8,num_key_value_heads=8,enable_lbloss=true \
-		--tokenizer_name allenai/OLMoE-1B-7B-0125"
+	model_cfg="--model_type moedl \
+		--config_overrides lb_coeff=0.01,num_experts=$(E),num_active_experts=$(K),intermediate_size=$(Dff),num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+b1_moedl_e8_k1:
+	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=8  K=1 Dff=2048 lr=8e-4
+b2_moedl_e16_k2:
+	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=16 K=2 Dff=1024 lr=8e-4
+b3_moedl_e32_k4:
+	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=32 K=4 Dff=512  lr=8e-4
+b4_moedl_e64_k8:
+	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=64 K=8 Dff=256  lr=8e-4
 
-olmoe-dropless:
-	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=-1.0 lr=1e-3
 
-olmoe-tokdrop-cf1.0: 
-	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=1.0 lr=1e-3
+_ablate-shared-experts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides lb_coeff=0.01,num_experts=$$((32-$(ES))),num_active_experts=$$((4-$(ES))),num_shared_experts=$(ES),intermediate_size=512,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+c1_moedl_s0_k4_e32:
+	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=0 lr=8e-4
+c2_moedl_s1_k3_e31:
+	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=1 lr=8e-4
+c3_moedl_s2_k2_e30:
+	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=2 lr=8e-4
+c4_moedl_s3_k1_e29:
+	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=3 lr=8e-4
 
-olmoe-tokdrop-cf1.5:
-	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=1.5 lr=1e-3
-
-olmoe-tokdrop-cf2.0:
-	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=2.0 lr=1e-3
-
-olmoe-tokdrop-cf2.5:
-	$(MAKE) _olmoe-e16-k2-tokdrop runlabel=$@-$(postfix) CF=2.5 lr=1e-3

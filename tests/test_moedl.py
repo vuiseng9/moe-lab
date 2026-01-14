@@ -783,6 +783,34 @@ class TestMoedlMoeSharedExperts:
 class TestMoedlMoeLoadBalancePenalty:
     """Test MoE load balance penalty method (auxiliary loss-based)."""
     
+    def test_lb_penalty_default_disabled(self):
+        """Test that load balance penalty is disabled by default (lb_coeff=0.0)."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            # lb_coeff not specified, should default to 0.0
+        )
+        
+        # Verify default is 0.0
+        assert config.lb_coeff == 0.0
+        
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # With default lb_coeff=0.0, no penalty should be applied
+        assert outputs.aux_loss is None
+    
     def test_lb_penalty_applied_when_coeff_nonzero(self):
         """Test that load balance penalty is added when lb_coeff > 0."""
         config = MoedlConfig(
@@ -981,6 +1009,405 @@ class TestMoedlMoeLoadBalancePenalty:
         
         # Loss should still be computed normally (just LM loss)
         assert outputs.loss is not None
+
+
+class TestMoedlMoeLoadBalanceBiasing:
+    """Test MoE load balance biasing method (DeepSeek V3 style)."""
+    
+    def test_lb_biasing_config_validation(self):
+        """Test that lb_gamma configuration is validated correctly."""
+        # Valid configuration with lb_gamma > 0
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,
+        )
+        assert config.lb_gamma == 0.01
+        assert config.lb_coeff == 0.0  # Should default to 0.0
+        
+        # Invalid: both lb_coeff and lb_gamma non-zero
+        with pytest.raises((ValueError, NotImplementedError)):
+            config = MoedlConfig(
+                vocab_size=500,
+                hidden_size=64,
+                intermediate_size=128,
+                num_hidden_layers=2,
+                num_attention_heads=4,
+                num_experts=8,
+                num_active_experts=2,
+                lb_gamma=0.01,
+                lb_coeff=0.01,
+            )
+    
+    def test_lb_biasing_buffer_creation(self):
+        """Test that e_score_bias buffer is created when lb_gamma > 0."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        
+        # Check that each MoE layer has the e_score_bias buffer
+        for layer in model.model.layers:
+            if hasattr(layer, 'moe'):
+                assert hasattr(layer.moe, 'e_score_bias'), "MoeBlk should have e_score_bias buffer when lb_gamma > 0"
+                assert layer.moe.e_score_bias.shape == (1, config.num_experts)
+                assert torch.all(layer.moe.e_score_bias == 0.0), "e_score_bias should be initialized to zeros"
+    
+    def test_lb_biasing_no_buffer_when_disabled(self):
+        """Test that e_score_bias buffer is NOT created when lb_gamma = 0."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.0,
+        )
+        model = MoedlForCausalLM(config)
+        
+        # Check that MoE layers do NOT have the e_score_bias buffer
+        for layer in model.model.layers:
+            if hasattr(layer, 'moe'):
+                assert not hasattr(layer.moe, 'e_score_bias'), "MoeBlk should not have e_score_bias buffer when lb_gamma = 0"
+    
+    def test_lb_biasing_forward_pass(self):
+        """Test that forward pass works with lb_gamma enabled."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        
+        with torch.no_grad():
+            outputs = model(input_ids)
+        
+        # Forward pass should work
+        assert outputs.logits is not None
+        assert outputs.router_logits is not None
+        
+        # No aux_loss for biasing method (no penalty)
+        assert outputs.aux_loss is None
+    
+    def test_lb_biasing_uses_sigmoid(self):
+        """Test that biasing method uses sigmoid activation instead of softmax."""
+        from moelab.moedl.modeling_moedl import MoeBlk
+        
+        config_biasing = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,
+        )
+        
+        config_penalty = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_coeff=0.01,
+        )
+        
+        moe_biasing = MoeBlk(config_biasing)
+        moe_penalty = MoeBlk(config_penalty)
+        
+        # Copy router weights to ensure same logits
+        moe_biasing.router.weight.data.copy_(moe_penalty.router.weight.data)
+        
+        moe_biasing.eval()
+        moe_penalty.eval()
+        
+        batch_size, seq_len = 2, 10
+        hidden_states = torch.randn(batch_size, seq_len, 64)
+        
+        with torch.no_grad():
+            output_biasing, router_logits_biasing = moe_biasing(hidden_states)
+            output_penalty, router_logits_penalty = moe_penalty(hidden_states)
+        
+        # Router logits should be different due to sigmoid vs softmax
+        # For biasing: router_logits is actually biased_scores (sigmoid + bias)
+        # For penalty: router_logits is raw logits
+        assert not torch.allclose(router_logits_biasing, router_logits_penalty, rtol=1e-3)
+        
+        # Outputs will be different due to different routing
+        assert output_biasing.shape == output_penalty.shape
+    
+    def test_lb_biasing_no_aux_loss(self):
+        """Test that biasing method does NOT generate aux_loss (unlike penalty method)."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        model.train()
+        
+        batch_size, seq_len = 2, 10
+        input_ids = torch.randint(0, 500, (batch_size, seq_len))
+        labels = torch.randint(0, 500, (batch_size, seq_len))
+        
+        outputs = model(input_ids, labels=labels)
+        
+        # Biasing method should NOT have aux_loss
+        assert outputs.aux_loss is None
+        
+        # But should have router_logits
+        assert outputs.router_logits is not None
+        
+        # Loss should only be LM loss
+        assert outputs.loss is not None
+    
+    def test_lb_biasing_bias_affects_routing(self):
+        """Test that e_score_bias actually affects expert selection."""
+        from moelab.moedl.modeling_moedl import MoeBlk
+        
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,
+        )
+        
+        moe = MoeBlk(config)
+        moe.eval()
+        
+        batch_size, seq_len = 2, 10
+        hidden_states = torch.randn(batch_size, seq_len, 64)
+        
+        # Forward pass with zero bias
+        with torch.no_grad():
+            output_zero_bias, _ = moe(hidden_states)
+        
+        # Manually set bias to favor expert 0
+        moe.e_score_bias[0, 0] = 10.0  # Large bias for expert 0
+        
+        with torch.no_grad():
+            output_with_bias, _ = moe(hidden_states)
+        
+        # Outputs should be different
+        assert not torch.allclose(output_zero_bias, output_with_bias, rtol=1e-3)
+    
+    def test_lb_biasing_dense_model_constraint(self):
+        """Test that dense models (num_experts=1) don't use biasing."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=1,
+            # lb_gamma is ignored for dense models
+        )
+        
+        # Should force lb_gamma to 0.0 for dense
+        assert config.lb_gamma == 0.0
+        
+        model = MoedlForCausalLM(config)
+        
+        # Dense model should not have MoE layers
+        for layer in model.model.layers:
+            assert not hasattr(layer, 'moe')
+
+
+class TestMoedlMoeDeepSeekV3Equivalence:
+    """Test equivalence between Moedl MoeBlk and DeepSeek V3 MoE module."""
+    
+    @pytest.fixture
+    def tiny_moe_config_nogrouping(self):
+        """Minimal config for equivalence testing without grouping."""
+        return {
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "moe_intermediate_size": 128,
+            "num_experts": 8,
+            "num_active_experts": 2,
+            "num_shared_experts": 1,
+            "lb_gamma": 0.01,
+            "hidden_act": "silu",
+            "mlp_bias": False,
+        }
+    
+    def test_deepseek_v3_availability(self):
+        """Check DeepSeek V3 is available for equivalence testing."""
+        try:
+            from transformers.models.deepseek_v3.modular_deepseek_v3 import DeepseekV3MoE
+            from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
+        except ImportError:
+            pytest.skip("DeepSeek V3 not available in this transformers version")
+    
+    def test_moe_forward_equivalence_no_grouping(self, tiny_moe_config_nogrouping):
+        """Test MoeBlk forward matches DeepseekV3MoE with no grouping (n_group=1)."""
+        try:
+            from transformers.models.deepseek_v3.modular_deepseek_v3 import DeepseekV3MoE, DeepseekV3TopkRouter
+            from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
+            from moelab.moedl.modeling_moedl import MoeBlk
+        except ImportError:
+            pytest.skip("DeepSeek V3 not available")
+        
+        # Moedl config
+        moedl_config = MoedlConfig(**tiny_moe_config_nogrouping)
+        moedl_moe = MoeBlk(moedl_config)
+        
+        # DeepSeek V3 config - disable grouping for equivalence
+        ds_config = DeepseekV3Config(
+            hidden_size=tiny_moe_config_nogrouping["hidden_size"],
+            intermediate_size=tiny_moe_config_nogrouping["intermediate_size"],
+            moe_intermediate_size=tiny_moe_config_nogrouping["moe_intermediate_size"],
+            n_routed_experts=tiny_moe_config_nogrouping["num_experts"],
+            num_experts_per_tok=tiny_moe_config_nogrouping["num_active_experts"],
+            n_shared_experts=tiny_moe_config_nogrouping["num_shared_experts"],
+            n_group=1,  # No grouping
+            topk_group=1,
+            norm_topk_prob=True,
+            routed_scaling_factor=1.0,  # No scaling
+            hidden_act=tiny_moe_config_nogrouping["hidden_act"],
+        )
+        ds_moe = DeepseekV3MoE(ds_config)
+        
+        # Copy router weights
+        moedl_moe.router.weight.data.copy_(ds_moe.gate.weight.data)
+        
+        # Copy routed expert weights
+        for i in range(tiny_moe_config_nogrouping["num_experts"]):
+            moedl_moe.experts[i].gate.weight.data.copy_(ds_moe.experts[i].gate_proj.weight.data)
+            moedl_moe.experts[i].up.weight.data.copy_(ds_moe.experts[i].up_proj.weight.data)
+            moedl_moe.experts[i].down.weight.data.copy_(ds_moe.experts[i].down_proj.weight.data)
+        
+        # Copy shared expert weights
+        # DeepSeek V3: single large MLP (intermediate = moe_intermediate_size * n_shared_experts)
+        # Moedl: list of n_shared_experts MLPs (each with moe_intermediate_size)
+        # For n_shared_experts=1, they should be equivalent
+        moedl_moe.common[0].gate.weight.data.copy_(ds_moe.shared_experts.gate_proj.weight.data)
+        moedl_moe.common[0].up.weight.data.copy_(ds_moe.shared_experts.up_proj.weight.data)
+        moedl_moe.common[0].down.weight.data.copy_(ds_moe.shared_experts.down_proj.weight.data)
+        
+        # Set zero bias for exact equivalence
+        moedl_moe.e_score_bias.zero_()
+        ds_moe.gate.e_score_correction_bias.zero_()
+        
+        moedl_moe.eval()
+        ds_moe.eval()
+        
+        # Test forward
+        batch_size, seq_len = 2, 10
+        hidden_states = torch.randn(batch_size, seq_len, tiny_moe_config_nogrouping["hidden_size"])
+        
+        with torch.no_grad():
+            moedl_output, _ = moedl_moe(hidden_states)
+            ds_output = ds_moe(hidden_states)
+        
+        # Outputs should match
+        torch.testing.assert_close(
+            moedl_output,
+            ds_output,
+            rtol=1e-4,
+            atol=1e-5,
+            msg="MoeBlk output should match DeepseekV3MoE with no grouping"
+        )
+    
+    def test_routing_equivalence_no_grouping(self, tiny_moe_config_nogrouping):
+        """Test that routing (expert selection) matches when grouping is disabled."""
+        try:
+            from transformers.models.deepseek_v3.modular_deepseek_v3 import DeepseekV3TopkRouter
+            from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
+            from moelab.moedl.modeling_moedl import MoeBlk
+        except ImportError:
+            pytest.skip("DeepSeek V3 not available")
+        
+        # Moedl config
+        moedl_config = MoedlConfig(**tiny_moe_config_nogrouping)
+        moedl_moe = MoeBlk(moedl_config)
+        
+        # DeepSeek V3 router
+        ds_config = DeepseekV3Config(
+            hidden_size=tiny_moe_config_nogrouping["hidden_size"],
+            n_routed_experts=tiny_moe_config_nogrouping["num_experts"],
+            num_experts_per_tok=tiny_moe_config_nogrouping["num_active_experts"],
+            n_group=1,
+            topk_group=1,
+            norm_topk_prob=True,
+            routed_scaling_factor=1.0,
+        )
+        ds_router = DeepseekV3TopkRouter(ds_config)
+        
+        # Copy router weights
+        moedl_moe.router.weight.data.copy_(ds_router.weight.data)
+        moedl_moe.e_score_bias.zero_()
+        ds_router.e_score_correction_bias.zero_()
+        
+        moedl_moe.eval()
+        ds_router.eval()
+        
+        batch_size, seq_len = 2, 5
+        hidden_states = torch.randn(batch_size, seq_len, tiny_moe_config_nogrouping["hidden_size"])
+        
+        with torch.no_grad():
+            # Moedl routing
+            flat_hidden = hidden_states.view(-1, tiny_moe_config_nogrouping["hidden_size"])
+            router_logits = moedl_moe.router(flat_hidden)
+            router_scores = router_logits.sigmoid()
+            biased_scores = router_scores + moedl_moe.e_score_bias
+            moedl_topk_weights, moedl_topk_ids = torch.topk(biased_scores, tiny_moe_config_nogrouping["num_active_experts"], dim=-1)
+            moedl_topk_weights_gathered = torch.gather(router_scores, dim=-1, index=moedl_topk_ids)
+            moedl_topk_weights_norm = moedl_topk_weights_gathered / (moedl_topk_weights_gathered.sum(dim=-1, keepdim=True) + 1e-20)
+            
+            # DeepSeek V3 routing
+            ds_topk_ids, ds_topk_weights = ds_router(hidden_states)
+        
+        # Expert selection should match
+        torch.testing.assert_close(
+            moedl_topk_ids.sort(dim=-1)[0],
+            ds_topk_ids.sort(dim=-1)[0],
+            msg="Selected expert IDs should match"
+        )
+        
+        # Weights should match (after normalization)
+        torch.testing.assert_close(
+            moedl_topk_weights_norm,
+            ds_topk_weights,
+            rtol=1e-4,
+            atol=1e-5,
+            msg="Normalized expert weights should match"
+        )
 
 
 if __name__ == "__main__":

@@ -36,7 +36,8 @@ class MoedlConfig(PretrainedConfig):
         num_experts=16,
         num_active_experts=4,
         num_shared_experts=0,
-        lb_coeff=0.01,
+        lb_coeff=0.0,
+        lb_gamma=0.0,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -71,8 +72,20 @@ class MoedlConfig(PretrainedConfig):
             self.num_experts = num_experts
             if num_active_experts > num_experts:
                 raise ValueError("num_active_experts cannot be greater than num_experts.")
+            if num_shared_experts < 0:
+                raise ValueError("num_shared_experts must be a non-negative integer less than num_experts.")
+            if lb_coeff < 0.0:
+                raise ValueError("lb_coeff must be a non-negative float.")
+            if lb_gamma < 0.0:
+                raise ValueError("load_balance_gamma must be a non-negative float.")
+            if lb_coeff > 0.0 and lb_gamma > 0.0:
+                raise NotImplementedError("Currently, load balance strategy via (1) penalty (2) biasing are mutually exclusive."
+                                          "Either lb_coeff or lb_gamma can be set to non-zero, but not both. Maybe supported in future.")
+
             self.num_active_experts = num_active_experts
             self.num_shared_experts = num_shared_experts
+            self.lb_coeff = lb_coeff
+            self.lb_gamma = lb_gamma
         else:
             # dense MLP
             # while shared expert semantically closer to dense MLP,
@@ -81,17 +94,8 @@ class MoedlConfig(PretrainedConfig):
             self.num_experts = 1  # Disable MoE when num_experts is set to 1
             self.num_active_experts = 1         
             self.num_shared_experts = 0
-
-        if self.num_experts > 1:
-            if num_shared_experts < 0:
-                raise ValueError("num_shared_experts must be a non-negative integer less than num_experts.")
-
-        if lb_coeff < 0.0:
-            raise ValueError("lb_coeff must be a non-negative float.")
-        
-        self.lb_coeff = 0.0 # zero by default if dense model
-        if self.num_experts > 1:
-            self.lb_coeff = lb_coeff
+            self.lb_coeff = 0.0  
+            self.lb_gamma = 0.0
 
         # Validate the correctness of rotary position embeddings parameters
         # BC: if there is a 'type' field, copy it it to 'rope_type'.
