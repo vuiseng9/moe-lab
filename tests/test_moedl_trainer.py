@@ -687,7 +687,7 @@ class TestMoedlTrainerBiasAdjustment:
             f"Bias for overloaded expert should decrease (was {initial_bias_e0}, now {final_bias_e0})"
     
     def test_adjust_balancing_biases_computation(self, moe_config_with_biasing):
-        """Test the bias adjustment computation logic directly."""
+        """Test the bias adjustment computation logic directly using LoadBalanceBiasController."""
         model = MoedlForCausalLM(moe_config_with_biasing)
         
         trainer = MoedlTrainer(
@@ -713,8 +713,9 @@ class TestMoedlTrainerBiasAdjustment:
         for name, module in trainer.moe_modules.items():
             initial_biases[name] = module.e_score_bias.clone()
         
-        # Apply adjustment
-        global_bias_sum = trainer.adjust_balancing_biases(load_per_expert)
+        # Apply adjustment via the controller
+        assert trainer.lb_ctrl is not None, "LoadBalanceBiasController should be initialized"
+        global_bias_sum = trainer.lb_ctrl(load_per_expert)
         
         # Check that layer 0's expert 0 bias decreased
         layer_0_module = list(trainer.moe_modules.values())[0]

@@ -1,7 +1,11 @@
 import math
+import logging
+import torch
 from moelab.trainer import MoelabTrainer
 from moelab.moedl import MoeBlk
-import torch
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 class MoedlTrainer(MoelabTrainer):
     """
@@ -16,19 +20,23 @@ class MoedlTrainer(MoelabTrainer):
         if not getattr(self._cfg, "num_experts", None):
             raise ValueError("Moedl config must have 'num_experts' attribute to determine MoE status.")
         
-        self.L  = self._cfg.num_hidden_layers
-        self.E  = self._cfg.num_experts
-        self.K  = self._cfg.num_active_experts
-        self.ES = self._cfg.num_shared_experts
-        self.CF = self._cfg.capacity_factor
+        self.L  = self.cfg.num_hidden_layers
+        self.E  = self.cfg.num_experts
+        self.K  = self.cfg.num_active_experts
+        self.ES = self.cfg.num_shared_experts
+        self.CF = self.cfg.capacity_factor
         self._is_moe = self.E > 1
 
+        self.lb_ctrl = None
         self.moe_modules = None
         if self.is_moe:
             self.moe_modules = {}
             for name, module in model.named_modules():
                 if isinstance(module, MoeBlk):
                     self.moe_modules[name] = module
+
+            self.lb_ctrl = LoadBalanceBiasController(self.moe_modules, self.cfg.lb_gamma)
+
 
     @property
     def cfg(self):
@@ -73,7 +81,7 @@ class MoedlTrainer(MoelabTrainer):
                 if self.cfg.lb_gamma > 0:
                     # layer-wise load per expert, all k-slot combined
                     load_per_expert = count.sum(-2)/(num_items_in_batch*self.K)
-                    lb_bias_global_sum = self.adjust_balancing_biases(load_per_expert)
+                    lb_bias_global_sum = self.lb_ctrl(load_per_expert)
                 else:
                     lb_bias_global_sum = math.nan
                 log_dict.update({f"moe/lb_bias_global_sum": lb_bias_global_sum})
@@ -92,19 +100,6 @@ class MoedlTrainer(MoelabTrainer):
 
         return (loss, outputs) if return_outputs else loss
 
-    @torch.no_grad()
-    def adjust_balancing_biases(self, load_per_expert):
-        assert load_per_expert.shape[-1] == self.E, "load_per_expert shape mismatch with num_experts"
-        
-        balance_ratio = 1/self.E
-        error = load_per_expert/balance_ratio - 1.0 # read as delta to 100% of ideal load
-
-        global_bias_sum = 0.0 # just for debug/logging purpose
-        for l, module in enumerate(self.moe_modules.values()):
-            module.e_score_bias.data -= self.cfg.lb_gamma * error[l]
-            global_bias_sum += module.e_score_bias.data.sum().item()
-        
-        return global_bias_sum
 
     @torch.no_grad()
     def get_expert_stats(self, router_logits):
@@ -135,3 +130,30 @@ class MoedlTrainer(MoelabTrainer):
         frac = count.float() / T
         
         return count, frac
+    
+@dataclass
+class LoadBalanceBiasController:
+    moe_modules: dict
+    gamma: float
+
+    def __post_init__(self):
+        if self.gamma == 0.0:
+            logger.warning("LoadBalanceBiasController initialized with gamma=0.0, no effect will be applied.")
+
+    def __call__(self, load_per_expert):
+        return self.adjust_router_lb_bias(load_per_expert)
+    
+    @torch.no_grad()
+    def adjust_router_lb_bias(self, load_per_expert):
+        assert load_per_expert.shape[0] == len(self.moe_modules), "load_per_expert shape mismatch with num_layers"
+        
+        L, E = load_per_expert.shape
+        balance_ratio = 1/E
+        error = load_per_expert/balance_ratio - 1.0 # read as delta to 100% of ideal load
+
+        global_bias_sum = 0.0 
+        for l, module in enumerate(self.moe_modules.values()):
+            module.e_score_bias.data -= self.gamma * error[l]
+            global_bias_sum += module.e_score_bias.data.sum().item()
+        
+        return global_bias_sum # this is just for debug purpose, no other practical use
