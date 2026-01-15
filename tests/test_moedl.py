@@ -1251,7 +1251,26 @@ class TestMoedlMoeLoadBalanceBiasing:
 class TestMoedlMoeDeepSeekV3Equivalence:
     """Test equivalence between Moedl MoeBlk and DeepSeek V3 MoE module."""
     
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
+    def setup_and_teardown(self):
+        """Set random seeds before each test and clean up after."""
+        # Setup: Set random seeds for deterministic behavior
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        if torch.backends.cudnn.is_available():
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        
+        yield  # Run the test
+        
+        # Teardown: Clean up after test
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if torch.backends.cudnn.is_available():
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.benchmark = True
+    
+    @pytest.fixture(scope="function")
     def tiny_moe_config_nogrouping(self):
         """Minimal config for equivalence testing without grouping."""
         return {
@@ -1284,9 +1303,15 @@ class TestMoedlMoeDeepSeekV3Equivalence:
         except ImportError:
             pytest.skip("DeepSeek V3 not available")
         
+        # Reset seed for deterministic model creation
+        torch.manual_seed(100)
+        
         # Moedl config
         moedl_config = MoedlConfig(**tiny_moe_config_nogrouping)
         moedl_moe = MoeBlk(moedl_config)
+        
+        # Ensure clean state
+        moedl_moe.n_drop = 0
         
         # DeepSeek V3 config - disable grouping for equivalence
         ds_config = DeepseekV3Config(
@@ -1324,14 +1349,15 @@ class TestMoedlMoeDeepSeekV3Equivalence:
         
         # Set zero bias for exact equivalence
         if hasattr(moedl_moe, 'e_score_bias'):
-            moedl_moe.e_score_bias.zero_()
+            moedl_moe.e_score_bias.data.zero_()
         if hasattr(ds_moe.gate, 'e_score_correction_bias'):
-            ds_moe.gate.e_score_correction_bias.zero_()
+            ds_moe.gate.e_score_correction_bias.data.zero_()
         
         moedl_moe.eval()
         ds_moe.eval()
         
-        # Test forward
+        # Test forward with deterministic input
+        torch.manual_seed(123)  # Fixed seed for reproducible input
         batch_size, seq_len = 2, 10
         hidden_states = torch.randn(batch_size, seq_len, tiny_moe_config_nogrouping["hidden_size"])
         
@@ -1357,9 +1383,15 @@ class TestMoedlMoeDeepSeekV3Equivalence:
         except ImportError:
             pytest.skip("DeepSeek V3 not available")
         
+        # Reset seed for deterministic model creation
+        torch.manual_seed(200)
+        
         # Moedl config
         moedl_config = MoedlConfig(**tiny_moe_config_nogrouping)
         moedl_moe = MoeBlk(moedl_config)
+        
+        # Ensure clean state
+        moedl_moe.n_drop = 0
         
         # DeepSeek V3 router
         ds_config = DeepseekV3Config(
@@ -1375,12 +1407,16 @@ class TestMoedlMoeDeepSeekV3Equivalence:
         
         # Copy router weights
         moedl_moe.router.weight.data.copy_(ds_router.weight.data)
-        moedl_moe.e_score_bias.zero_()
-        ds_router.e_score_correction_bias.zero_()
+        if hasattr(moedl_moe, 'e_score_bias'):
+            moedl_moe.e_score_bias.data.zero_()
+        if hasattr(ds_router, 'e_score_correction_bias'):
+            ds_router.e_score_correction_bias.data.zero_()
         
         moedl_moe.eval()
         ds_router.eval()
         
+        # Use deterministic input
+        torch.manual_seed(456)  # Fixed seed for reproducible input
         batch_size, seq_len = 2, 5
         hidden_states = torch.randn(batch_size, seq_len, tiny_moe_config_nogrouping["hidden_size"])
         
@@ -1405,12 +1441,28 @@ class TestMoedlMoeDeepSeekV3Equivalence:
         )
         
         # Weights should match (after normalization)
+        # Since topk can return elements in different orders when values are tied,
+        # we need to sort both IDs and weights together, then compare
+        moedl_sorted_weights, moedl_sort_indices = moedl_topk_weights_norm.sort(dim=-1)
+        moedl_sorted_ids_by_weight = torch.gather(moedl_topk_ids, dim=-1, index=moedl_sort_indices)
+        
+        ds_sorted_weights, ds_sort_indices = ds_topk_weights.sort(dim=-1)
+        ds_sorted_ids_by_weight = torch.gather(ds_topk_ids, dim=-1, index=ds_sort_indices)
+        
+        # Verify IDs match when sorted by weight
         torch.testing.assert_close(
-            moedl_topk_weights_norm,
-            ds_topk_weights,
+            moedl_sorted_ids_by_weight,
+            ds_sorted_ids_by_weight,
+            msg="Expert IDs sorted by weight should match"
+        )
+        
+        # Verify weights match when sorted
+        torch.testing.assert_close(
+            moedl_sorted_weights,
+            ds_sorted_weights,
             rtol=1e-4,
             atol=1e-5,
-            msg="Normalized expert weights should match"
+            msg="Sorted normalized expert weights should match"
         )
 
 

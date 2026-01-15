@@ -4,6 +4,10 @@ from transformers import Trainer
 class MoelabTrainer(Trainer):
     """
     adds utilities only. Model-specific overrides live downstream.
+    # TODO: revise design, brittle design
+    #       wandb handle is only created if WandbCallback is used and during runtime
+    #       if any downstream consumer of MoelabTrainer.wandb is called before that, 
+    #       it will be None.
     """
 
     def __init__(self, *args, **kwargs):

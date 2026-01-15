@@ -240,37 +240,41 @@ class TestMoedlTrainerMoeModel:
         assert outputs.aux_loss is not None  # lb_coeff > 0
         assert outputs.aux_loss >= 0
     
-    def test_moe_model_wandb_logging_no_lb(self, moe_model_config, training_args, tiny_dataset):
+    def test_moe_model_wandb_logging_no_lb(self, moe_model_config, tmp_path, tiny_dataset):
         """Test wandb logging for MoE model without load balancing."""
         model = MoedlForCausalLM(moe_model_config)
         
         # Enable wandb reporting
-        training_args.report_to = ["wandb"]
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
         trainer = MoedlTrainer(
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
         )
         
-        # Mock wandb
+        # Mock wandb on the trainer (callback will use trainer.wandb)
         mock_wandb = Mock()
         trainer._wb_handler = mock_wandb
         
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
-        }
-        
-        trainer.compute_loss(model, batch, num_items_in_batch=2)
+        # Train for one step to trigger callback logging
+        trainer.train()
         
         # Check that wandb.log was called
-        mock_wandb.log.assert_called_once()
+        mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
         
-        # Should have expert load stats
-        assert any(key.startswith("moe/top1/load/e") for key in log_dict.keys())
+        # Should have expert load stats (now uses layer_0 format)
+        assert any(key.startswith("moe/load/layer_0/e") for key in log_dict.keys())
         # Should have 8 experts (e000 to e007)
-        expert_keys = [k for k in log_dict.keys() if k.startswith("moe/top1/load/e")]
+        expert_keys = [k for k in log_dict.keys() if k.startswith("moe/load/layer_0/e")]
         assert len(expert_keys) == 8
         
         # lb_loss should be nan (lb_coeff=0)
@@ -278,12 +282,20 @@ class TestMoedlTrainerMoeModel:
         import math
         assert math.isnan(log_dict["train/lb_loss"])
     
-    def test_moe_model_wandb_logging_with_lb(self, moe_model_config, training_args, tiny_dataset):
+    def test_moe_model_wandb_logging_with_lb(self, moe_model_config, tmp_path, tiny_dataset):
         """Test wandb logging for MoE model with load balancing."""
         moe_model_config.lb_coeff = 0.01
         model = MoedlForCausalLM(moe_model_config)
         
-        training_args.report_to = ["wandb"]
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
         trainer = MoedlTrainer(
             model=model,
             args=training_args,
@@ -293,18 +305,14 @@ class TestMoedlTrainerMoeModel:
         mock_wandb = Mock()
         trainer._wb_handler = mock_wandb
         
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
-        }
+        # Train for one step to trigger callback logging
+        trainer.train()
         
-        trainer.compute_loss(model, batch, num_items_in_batch=2)
-        
-        mock_wandb.log.assert_called_once()
+        mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
         
-        # Should have expert load stats
-        expert_keys = [k for k in log_dict.keys() if k.startswith("moe/top1/load/e")]
+        # Should have expert load stats (now uses layer_0 format)
+        expert_keys = [k for k in log_dict.keys() if k.startswith("moe/load/layer_0/e")]
         assert len(expert_keys) == 8
         
         # lb_loss should be a finite number
@@ -437,12 +445,20 @@ class TestMoedlTrainerExpertStats:
 class TestMoedlTrainerIntegration:
     """Integration tests for MoedlTrainer."""
     
-    def test_full_training_step_moe_with_lb(self, moe_model_config, training_args, tiny_dataset):
+    def test_full_training_step_moe_with_lb(self, moe_model_config, tmp_path, tiny_dataset):
         """Test a full training step with MoE model and load balancing."""
         moe_model_config.lb_coeff = 0.01
         model = MoedlForCausalLM(moe_model_config)
         
-        training_args.report_to = ["wandb"]
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
         trainer = MoedlTrainer(
             model=model,
             args=training_args,
@@ -453,31 +469,16 @@ class TestMoedlTrainerIntegration:
         mock_wandb = Mock()
         trainer._wb_handler = mock_wandb
         
-        # Perform a training step
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
-        }
-        
-        loss, outputs = trainer.compute_loss(
-            model, batch, num_items_in_batch=2, return_outputs=True
-        )
-        
-        # Verify loss is computed
-        assert loss is not None
-        assert torch.isfinite(loss)
-        
-        # Verify outputs
-        assert outputs.router_logits is not None
-        assert outputs.aux_loss is not None
+        # Train for one step
+        trainer.train()
         
         # Verify wandb logging
-        mock_wandb.log.assert_called_once()
+        mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
         
         # Should have expert stats and lb_loss
         assert "train/lb_loss" in log_dict
-        assert any(key.startswith("moe/top1/load/e") for key in log_dict.keys())
+        assert any(key.startswith("moe/load/layer_0/e") for key in log_dict.keys())
         
         # lb_loss should be positive
         assert log_dict["train/lb_loss"] > 0
@@ -784,7 +785,7 @@ class TestMoedlTrainerBiasAdjustment:
         trainer.train()
     
     def test_wandb_logging_with_biasing(self, moe_config_with_biasing, tmp_path, tiny_dataset):
-        """Test wandb logging includes lb_bias_global_sum when biasing is enabled."""
+        """Test wandb logging includes lb_bias_dbg when biasing is enabled."""
         model = MoedlForCausalLM(moe_config_with_biasing)
         
         # Mock wandb object
@@ -808,25 +809,17 @@ class TestMoedlTrainerBiasAdjustment:
         # Inject mock wandb directly through _wb_handler
         trainer._wb_handler = mock_wandb
         
-        # Get device from model
-        device = next(model.parameters()).device
-        
-        # Perform training step
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
-            "labels": torch.randint(0, 1000, (2, 5), device=device),
-        }
-        
-        loss, outputs = trainer.compute_loss(
-            model, batch, num_items_in_batch=2, return_outputs=True
-        )
+        # Train for one step to trigger callback logging
+        trainer.train()
         
         # Verify wandb logging was called
         mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
         
-        # Should have lb_bias_global_sum
-        assert "moe/lb_bias_global_sum" in log_dict, "Should log lb_bias_global_sum when lb_gamma > 0"
+        # Should have lb_bias_dbg (callback now uses this key)
+        assert "train/lb_bias_dbg" in log_dict, "Should log lb_bias_dbg when lb_gamma > 0"
+        assert isinstance(log_dict["train/lb_bias_dbg"], float)
+        assert log_dict["train/lb_bias_dbg"] >= 0
         
         # lb_loss should be NaN (not using penalty method)
         assert "train/lb_loss" in log_dict
@@ -874,15 +867,8 @@ class TestMoedlTrainerCapacityFactor:
         
         trainer._wb_handler = mock_wandb
         
-        device = next(model.parameters()).device
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
-            "labels": torch.randint(0, 1000, (2, 5), device=device),
-        }
-        
-        loss, outputs = trainer.compute_loss(
-            model, batch, num_items_in_batch=2, return_outputs=True
-        )
+        # Train for one step to trigger callback logging
+        trainer.train()
         
         mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
@@ -915,15 +901,8 @@ class TestMoedlTrainerCapacityFactor:
         
         trainer._wb_handler = mock_wandb
         
-        device = next(model.parameters()).device
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 10), device=device),
-            "labels": torch.randint(0, 1000, (2, 10), device=device),
-        }
-        
-        loss, outputs = trainer.compute_loss(
-            model, batch, num_items_in_batch=2, return_outputs=True
-        )
+        # Train for one step to trigger callback logging
+        trainer.train()
         
         mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
@@ -1027,15 +1006,8 @@ class TestMoedlTrainerCapacityFactor:
         
         trainer._wb_handler = mock_wandb
         
-        device = next(model.parameters()).device
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 10), device=device),
-            "labels": torch.randint(0, 1000, (2, 10), device=device),
-        }
-        
-        loss, outputs = trainer.compute_loss(
-            model, batch, num_items_in_batch=2, return_outputs=True
-        )
+        # Train for one step to trigger callback logging
+        trainer.train()
         
         mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
@@ -1082,25 +1054,219 @@ class TestMoedlTrainerCapacityFactor:
         
         trainer._wb_handler = mock_wandb
         
-        device = next(model.parameters()).device
-        batch = {
-            "input_ids": torch.randint(0, 1000, (2, 10), device=device),
-            "labels": torch.randint(0, 1000, (2, 10), device=device),
-        }
-        
-        loss, outputs = trainer.compute_loss(
-            model, batch, num_items_in_batch=2, return_outputs=True
-        )
+        # Train for one step to trigger callback logging
+        trainer.train()
         
         mock_wandb.log.assert_called()
         log_dict = mock_wandb.log.call_args[0][0]
         
         # Should log both token_drop_ratio and bias adjustment metrics
         assert "train/token_drop_ratio" in log_dict
-        assert "moe/lb_bias_global_sum" in log_dict
+        assert "train/lb_bias_dbg" in log_dict  # Now uses lb_bias_dbg instead of lb_bias_global_sum
         import math
         assert not math.isnan(log_dict["train/token_drop_ratio"])
-        assert not math.isnan(log_dict["moe/lb_bias_global_sum"])
+        assert not math.isnan(log_dict["train/lb_bias_dbg"])
+        assert log_dict["train/lb_bias_dbg"] >= 0.0
+
+
+class TestMoedlTrainerGradientAccumulation:
+    """Test MoedlTrainer behavior with gradient accumulation.
+    
+    These tests expose bugs where operations in compute_loss are executed
+    per forward pass instead of per optimizer step.
+    """
+    
+    def test_bias_adjustment_with_gradient_accumulation(self, tmp_path, tiny_dataset):
+        """Test that bias adjustment happens once per optimizer step via callback.
+        
+        With the new callback architecture, bias adjustment should happen in
+        on_step_end, which is called once per optimizer step (after all gradient
+        accumulation steps are complete).
+        """
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,  # Enable bias-based load balancing
+        )
+        model = MoedlForCausalLM(config)
+        
+        gradient_accumulation_steps = 4
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            max_steps=2,  # 2 optimizer steps
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        # Find the MoedlPerStepCallback in the trainer's callbacks
+        moedl_callback = None
+        for cb in trainer.callback_handler.callbacks:
+            if cb.__class__.__name__ == "MoedlPerStepCallback":
+                moedl_callback = cb
+                break
+        
+        assert moedl_callback is not None, "MoedlPerStepCallback should be registered"
+
+        # Patch LoadBalanceBiasController.__call__ on the class to count invocations
+        # Note: We must patch on the class level, not instance level, because
+        # Python looks up __call__ on the class when invoking an instance as a function
+        from moelab.moedl.trainer import LoadBalanceBiasController
+        call_count = {"count": 0}
+
+        def counting_wrapper(self, *args, **kwargs):
+            call_count["count"] += 1
+            # Call the original adjust_router_lb_bias method
+            return self.adjust_router_lb_bias(*args, **kwargs)
+
+        LoadBalanceBiasController.__call__ = counting_wrapper
+
+        # Train for 2 optimizer steps
+        trainer.train()
+
+        # With the new callback architecture:
+        # - Bias adjustment happens in on_step_end callback
+        # - on_step_end is called once per optimizer step
+        # - Expected: 2 calls (once per optimizer step)
+        
+        expected_calls = 2
+        actual_calls = call_count["count"]
+        
+        assert actual_calls == expected_calls, (
+            f"LoadBalanceBiasController called {actual_calls} times, "
+            f"expected {expected_calls} times (once per optimizer step). "
+            f"With {gradient_accumulation_steps} gradient accumulation steps and "
+            f"{training_args.max_steps} optimizer steps."
+        )
+    
+    def test_wandb_logging_with_gradient_accumulation(self, tmp_path, tiny_dataset):
+        """Test that wandb logging happens once per logging step via callback.
+        
+        With the new callback architecture, wandb logging happens in on_log,
+        which respects logging_steps.
+        """
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            lb_gamma=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        
+        mock_wandb = Mock()
+        
+        gradient_accumulation_steps = 4
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            max_steps=2,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        trainer._wb_handler = mock_wandb
+        
+        # Train for 2 optimizer steps
+        trainer.train()
+        
+        # With the new callback architecture:
+        # - Logging happens in on_log callback
+        # - on_log is called every logging_steps (=1) optimizer steps
+        # - Expected: 2 calls (once per logging step = once per optimizer step)
+        expected_calls = 2
+        actual_calls = mock_wandb.log.call_count
+        
+        assert actual_calls == expected_calls, (
+            f"wandb.log called {actual_calls} times, expected {expected_calls} times. "
+            f"With {gradient_accumulation_steps} gradient accumulation steps, "
+            f"{training_args.max_steps} optimizer steps, and logging_steps={training_args.logging_steps}."
+        )
+    
+    def test_token_drop_stats_with_gradient_accumulation(self, tmp_path, tiny_dataset):
+        """Test that token drop stats are accumulated properly via callback.
+        
+        With the new callback architecture, stats are accumulated across gradient
+        accumulation steps and logged once per logging step.
+        """
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=1.0,  # Enable capacity-based dropping
+            lb_gamma=0.01,
+        )
+        model = MoedlForCausalLM(config)
+        
+        mock_wandb = Mock()
+        
+        gradient_accumulation_steps = 4
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            max_steps=1,
+            logging_steps=1,
+            save_steps=999999,
+            report_to=["wandb"],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=tiny_dataset,
+        )
+        
+        trainer._wb_handler = mock_wandb
+        
+        # Train for 1 optimizer step (4 forward passes due to gradient accumulation)
+        trainer.train()
+        
+        # With the new callback architecture:
+        # - Stats are accumulated via TensorMeter across all micro-batches
+        # - Logging happens once in on_log callback per logging step
+        # - Expected: 1 call for 1 optimizer step
+        log_calls = mock_wandb.log.call_args_list
+        
+        assert len(log_calls) == 1, (
+            f"Expected 1 wandb.log call per optimizer step, got {len(log_calls)}. "
+            f"With {gradient_accumulation_steps} gradient accumulation steps and "
+            f"{training_args.max_steps} optimizer step(s)."
+        )
+        
+        # Verify the logged data contains the expected metrics
+        logged_data = log_calls[0][0][0]
+        assert "train/token_drop_ratio" in logged_data, "Should log token drop ratio"
+        assert "train/lb_loss" in logged_data, "Should log lb_loss"
+        assert "train/lb_bias_dbg" in logged_data, "Should log lb_bias_dbg"
 
 
 if __name__ == "__main__":
