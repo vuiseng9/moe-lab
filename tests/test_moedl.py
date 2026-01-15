@@ -631,6 +631,143 @@ class TestMoedlMoeOlmoeEquivalence:
             atol=1e-5
         )
     
+    def test_moe_block_backward_equivalence(self, tiny_moe_config):
+        """Test that MoeBlk produces same gradients as OlmoeSparseMoeBlock with same weights."""
+        from transformers.models.olmoe.modeling_olmoe import OlmoeSparseMoeBlock, OlmoeConfig
+        from moelab.moedl.modeling_moedl import MoeBlk, load_balancing_loss_func
+        
+        # Use non-zero lb_coeff for this test
+        lb_coeff = 0.5
+        tiny_moe_config_with_lb = {**tiny_moe_config, "lb_coeff": lb_coeff}
+        
+        # Create Moedl MoeBlk
+        moedl_config = MoedlConfig(**tiny_moe_config_with_lb)
+        moedl_moe = MoeBlk(moedl_config)
+        
+        # Create Olmoe SparseMoeBlock with compatible config
+        # Olmoe uses router_aux_loss_coef instead of lb_coeff
+        olmoe_config_dict = {
+            "hidden_size": tiny_moe_config["hidden_size"],
+            "intermediate_size": tiny_moe_config["intermediate_size"],
+            "num_experts": tiny_moe_config["num_experts"],
+            "num_experts_per_tok": tiny_moe_config["num_active_experts"],
+            "norm_topk_prob": True,
+            "hidden_act": tiny_moe_config["hidden_act"],
+            "mlp_bias": False,
+            "router_aux_loss_coef": lb_coeff,  # Match Moedl's lb_coeff
+        }
+        olmoe_config = OlmoeConfig(**olmoe_config_dict)
+        olmoe_moe = OlmoeSparseMoeBlock(olmoe_config)
+        
+        # Copy weights from Olmoe to Moedl
+        moedl_moe.router.weight.data.copy_(olmoe_moe.gate.weight.data)
+        for i in range(tiny_moe_config["num_experts"]):
+            moedl_moe.experts[i].gate.weight.data.copy_(olmoe_moe.experts[i].gate_proj.weight.data)
+            moedl_moe.experts[i].up.weight.data.copy_(olmoe_moe.experts[i].up_proj.weight.data)
+            moedl_moe.experts[i].down.weight.data.copy_(olmoe_moe.experts[i].down_proj.weight.data)
+        
+        # Set to train mode
+        moedl_moe.train()
+        olmoe_moe.train()
+        
+        # Create input
+        batch_size, seq_len, hidden_dim = 2, 10, tiny_moe_config["hidden_size"]
+        torch.manual_seed(42)
+        hidden_states_moedl = torch.randn(batch_size, seq_len, hidden_dim, requires_grad=True)
+        hidden_states_olmoe = hidden_states_moedl.clone().detach().requires_grad_(True)
+        
+        # Forward pass for Moedl
+        moedl_output, moedl_router_logits = moedl_moe(hidden_states_moedl)
+        
+        # Compute auxiliary loss for Moedl
+        moedl_aux_loss = load_balancing_loss_func(
+            gate_logits=(moedl_router_logits,),
+            num_experts=tiny_moe_config["num_experts"],
+            top_k=tiny_moe_config["num_active_experts"],
+            attention_mask=None,
+        )
+        
+        # Compute total loss for Moedl (sum of outputs + aux_loss weighted by lb_coeff)
+        moedl_total_loss = moedl_output.sum() + lb_coeff * moedl_aux_loss
+        
+        # Forward pass for Olmoe
+        olmoe_output, olmoe_router_logits = olmoe_moe(hidden_states_olmoe)
+        
+        # Compute auxiliary loss for Olmoe (using same function)
+        olmoe_aux_loss = load_balancing_loss_func(
+            gate_logits=(olmoe_router_logits,),
+            num_experts=tiny_moe_config["num_experts"],
+            top_k=tiny_moe_config["num_active_experts"],
+            attention_mask=None,
+        )
+        
+        # Compute total loss for Olmoe
+        olmoe_total_loss = olmoe_output.sum() + lb_coeff * olmoe_aux_loss
+        
+        # Check that auxiliary losses match
+        torch.testing.assert_close(
+            moedl_aux_loss,
+            olmoe_aux_loss,
+            rtol=1e-4,
+            atol=1e-5,
+            msg="Auxiliary losses should match"
+        )
+        
+        # Check that total losses match
+        torch.testing.assert_close(
+            moedl_total_loss,
+            olmoe_total_loss,
+            rtol=1e-4,
+            atol=1e-5,
+            msg="Total losses should match"
+        )
+        
+        # Backward pass
+        moedl_total_loss.backward()
+        olmoe_total_loss.backward()
+        
+        # Check router gradients match
+        torch.testing.assert_close(
+            moedl_moe.router.weight.grad,
+            olmoe_moe.gate.weight.grad,
+            rtol=1e-4,
+            atol=1e-5,
+            msg="Router gradients should match"
+        )
+        
+        # Check expert gradients match for all experts
+        for i in range(tiny_moe_config["num_experts"]):
+            torch.testing.assert_close(
+                moedl_moe.experts[i].gate.weight.grad,
+                olmoe_moe.experts[i].gate_proj.weight.grad,
+                rtol=1e-4,
+                atol=1e-5,
+                msg=f"Expert {i} gate gradients should match"
+            )
+            torch.testing.assert_close(
+                moedl_moe.experts[i].up.weight.grad,
+                olmoe_moe.experts[i].up_proj.weight.grad,
+                rtol=1e-4,
+                atol=1e-5,
+                msg=f"Expert {i} up gradients should match"
+            )
+            torch.testing.assert_close(
+                moedl_moe.experts[i].down.weight.grad,
+                olmoe_moe.experts[i].down_proj.weight.grad,
+                rtol=1e-4,
+                atol=1e-5,
+                msg=f"Expert {i} down gradients should match"
+            )
+        
+        # Check input gradients match
+        torch.testing.assert_close(
+            hidden_states_moedl.grad,
+            hidden_states_olmoe.grad,
+            rtol=1e-4,
+            atol=1e-5,
+            msg="Input gradients should match"
+        )
+    
     def test_moe_block_expert_selection(self, tiny_moe_config):
         """Test that expert selection works correctly."""
         from moelab.moedl.modeling_moedl import MoeBlk
