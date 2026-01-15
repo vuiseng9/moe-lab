@@ -4,7 +4,7 @@ WANDB_PROJECT ?= moe-lab
 OUTROOT ?= /root/work/run
 gpulist ?= 0
 extra_args ?=
-postfix ?= r1
+postfix ?= r0
 
 # Design:
 # 1. Not checking variables like lr, runlabel, gamma, enable_lb 
@@ -42,6 +42,18 @@ else
 	fi
 endif
 
+INSTALL_MSG = "[Info:] Please log in W&B (wandb login) and HF (hf auth login) before starting runs"
+install-moelab:
+	pip install -e .
+	@echo $(INSTALL_MSG)
+
+install-dev-moelab:
+	pip install -e .[dev]
+	@echo $(INSTALL_MSG)
+
+run-tests: gpulist-check-busy
+	CUDA_VISIBLE_DEVICES=$(gpulist) pytest -v --tb=short tests/
+
 __pretrain-tinystories: gpulist-check-busy
 	mkdir -p $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) && \
 	WANDB_PROJECT=$(WANDB_PROJECT) \
@@ -64,7 +76,7 @@ _llama2-ts:
 	model_cfg="--model_type llama \
 		--config_overrides hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
-00-llama2_ref:
+00_llama2_ref:
 	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
 
 _moedl-dense-ts:
@@ -72,7 +84,7 @@ _moedl-dense-ts:
 	model_cfg="--model_type moedl \
 		--config_overrides num_experts=1,num_active_experts=1,hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
-01-moedl_dense:
+01_moedl_dense:
 	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=1e-3
 
 
