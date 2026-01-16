@@ -185,8 +185,9 @@ class MoedlPerStepCallback(TrainerCallback):
         self.reset_meters()
 
     def on_log(self, args, state, control, **kwargs):
+        # NOTE: not using kwargs['logs'] to keep stdout clean
         if self.trainer.wandb and len(self.log_dict) > 0:        
-            self.trainer.wandb.log(self.log_dict.pop())
+            self.trainer.wandb.log(self.log_dict.pop(), step=state.global_step)
 
     def reset_meters(self):
         self.routing_stat.reset()
