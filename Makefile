@@ -1,10 +1,10 @@
 
 
 WANDB_PROJECT ?= moe-lab
-OUTROOT ?= /root/work/run
+OUTROOT ?= /mnt/shared-fin3-nN1DkGiJ
 gpulist ?= 0
 extra_args ?=
-postfix ?= r0
+postfix ?= p2
 
 # Design:
 # 1. Not checking variables like lr, runlabel, gamma, enable_lb 
@@ -86,6 +86,21 @@ _moedl-dense-ts:
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 01_moedl_dense:
 	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=1e-3
+
+
+_ablate-num-experts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides lb_coeff=0.0,lb_gamma=0.01,num_experts=$(E),num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+z1_moedl_e2_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=2 lr=8e-4
+z2_moedl_e4_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=4 lr=8e-4
+z3_moedl_e8_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=8 lr=8e-4
+z4_moedl_e16_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=16 lr=8e-4
 
 
 _ablate-load-balance:
