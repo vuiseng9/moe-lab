@@ -41,7 +41,7 @@ class MoedlTrainer(MoelabTrainer):
         if self.is_moe:
             self.moe_modules = {}
             self.routing_stat = TensorMeter()  # shape (L, K, E), token count per expert per k slot per layer
-            self.expert_load  = TensorMeter()  # shape (L, E), expert load at every layer (reduced over k slots)
+            self.expert_load  = TensorMeter()  # shape (L, K, E), above denominated by total tokens T
             for name, module in model.named_modules():
                 if isinstance(module, MoeBlk):
                     self.moe_modules[name] = module
@@ -76,7 +76,7 @@ class MoedlTrainer(MoelabTrainer):
         if self.is_moe:
             count, frac = self.get_expert_stats(outputs.router_logits)
             self.routing_stat.update(count.float())
-            self.expert_load.update(frac.mean(dim=-2)) 
+            self.expert_load.update(frac) 
             # frac is expert load per k slot per layer
             # reduce over k (dim=-2) by mean (each k slot attends same total number of tokens)
 
@@ -173,7 +173,7 @@ class MoedlPerStepCallback(TrainerCallback):
     def on_step_end(self, args, state, control, **kwargs):
         # apply load balance bias adjustment (only if gamma > 0)
         if self.lb_ctrl.gamma > 0:
-            self.trainer.last_lb_bias_dbg = self.lb_ctrl(self.expert_load.avg)
+            self.trainer.last_lb_bias_dbg = self.lb_ctrl(self.expert_load.avg.mean(dim=-2))
 
         if self.trainer.wandb:
             d = {}
@@ -181,7 +181,7 @@ class MoedlPerStepCallback(TrainerCallback):
             # intentionally only log layer 0 stats
             # more layers will bloat the logging 
             # global stats may get smoothed out over layers
-            for i, frac in enumerate(self.expert_load.last[layer].tolist()):
+            for i, frac in enumerate(self.expert_load.avg.mean(dim=-2)[layer].tolist()):
                 d[f"moe/load/layer_{layer}/e{i:03d}"] = round(frac, 3)
             d[f"lb_loss"] = self.trainer.last_lb_loss
             d[f"token_drop_ratio"] = self.trainer.last_drop_ratio
