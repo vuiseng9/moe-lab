@@ -36,6 +36,7 @@ class MoedlTrainer(MoelabTrainer):
         self.last_lb_loss = math.nan
         self.last_drop_ratio = math.nan
         self.last_lb_bias_dbg = math.nan
+        self.moe_log_metrics = deque(maxlen=1)
 
         if self.is_moe:
             self.moe_modules = {}
@@ -56,6 +57,12 @@ class MoedlTrainer(MoelabTrainer):
     def is_moe(self):
         """Check if the underlying model has MoE layers (num_experts > 1)."""
         return self._is_moe
+
+    def log(self, logs: dict, start_time: float = None):
+        # loss key presence indicates a training step log
+        if 'loss' in logs and len(self.moe_log_metrics) > 0:
+            logs.update(self.moe_log_metrics.pop())
+        super().log(logs, start_time=start_time)
 
     def compute_loss(self, model, inputs, num_items_in_batch, return_outputs=False):
         # Call HF Trainer's compute_loss
@@ -156,13 +163,12 @@ class MoedlPerStepCallback(TrainerCallback):
         self.lb_ctrl = self.trainer.lb_ctrl
         self.routing_stat = self.trainer.routing_stat
         self.expert_load  = self.trainer.expert_load
-        self.log_dict = deque(maxlen=1)
-        # because on_step_end is called before on_log,
-        # reset_meters() purges the required info before logging.
-        # we use a deque to cache the log dict
-        # and pop it in on_log.
-        # why we don't just log in on_step_end?
-        # honoring user's logging_steps 
+        self.moe_log_metrics = self.trainer.moe_log_metrics
+        # call order
+        # callback.on_step_end() -> trainer.log() -> callback.on_log()
+        # we avoid additional on_log callback here by
+        # directly updating logs object in trainer.log()
+        # we use a deque to cache the moe metrics during on_step_end.
 
     def on_step_end(self, args, state, control, **kwargs):
         # apply load balance bias adjustment (only if gamma > 0)
@@ -177,16 +183,13 @@ class MoedlPerStepCallback(TrainerCallback):
             # global stats may get smoothed out over layers
             for i, frac in enumerate(self.expert_load.last[layer].tolist()):
                 d[f"moe/load/layer_{layer}/e{i:03d}"] = round(frac, 3)
-            d[f"train/lb_loss"] = self.trainer.last_lb_loss
-            d[f"train/token_drop_ratio"] = self.trainer.last_drop_ratio
-            d[f"train/lb_bias_dbg"] = self.trainer.last_lb_bias_dbg
-            self.log_dict.append(d)
+            d[f"lb_loss"] = self.trainer.last_lb_loss
+            d[f"token_drop_ratio"] = self.trainer.last_drop_ratio
+            d[f"lb_bias_dbg"] = self.trainer.last_lb_bias_dbg
+            # Trainer.log will automatically prepend train/
+            self.moe_log_metrics.append(d)
         
         self.reset_meters()
-
-    def on_log(self, args, state, control, **kwargs):
-        if self.trainer.wandb and len(self.log_dict) > 0:        
-            self.trainer.wandb.log(self.log_dict.pop())
 
     def reset_meters(self):
         self.routing_stat.reset()
