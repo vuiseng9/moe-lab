@@ -5,6 +5,7 @@ OUTROOT ?= /root/work/run
 gpulist ?= 0
 extra_args ?=
 postfix ?= r0
+ckpt ?= roneneldan/TinyStories-33M
 
 # Design:
 # 1. Not checking variables like lr, runlabel, gamma, enable_lb 
@@ -53,6 +54,9 @@ install-dev-moelab:
 
 run-tests: gpulist-check-busy
 	CUDA_VISIBLE_DEVICES=$(gpulist) pytest -v --tb=short tests/
+
+gen-tinystories:
+	CUDA_VISIBLE_DEVICES=$(gpulist) neoclm-eval-ts -R $(ckpt)
 
 __pretrain-tinystories: gpulist-check-busy
 	mkdir -p $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) && \

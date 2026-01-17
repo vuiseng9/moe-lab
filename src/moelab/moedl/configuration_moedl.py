@@ -113,4 +113,10 @@ class MoedlConfig(PretrainedConfig):
             **kwargs,
         )
 
+        # Enables remote custom code loading via trust_remote_code=True
+        self.auto_map = {
+            "AutoConfig": "configuration_moedl.MoedlConfig",
+            "AutoModelForCausalLM": "modeling_moedl.MoedlForCausalLM",
+        }
+
 __all__ = ["MoedlConfig"]

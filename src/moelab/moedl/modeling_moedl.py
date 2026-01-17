@@ -1,6 +1,7 @@
 """Moedl model architecture."""
-import math
 from typing import Callable, Optional, Union
+from pathlib import Path
+import shutil
 
 import torch
 import torch.nn.functional as F
@@ -677,6 +678,19 @@ class MoedlPreTrainedModel(PreTrainedModel):
         "hidden_states": MoedlDecoderLayer,
         "attentions": MoedlAttention,
     }
+
+    def save_pretrained(self, save_directory, *args, **kwargs):
+        super().save_pretrained(save_directory, *args, **kwargs)
+        # copy over modeling_moedl.py and configuration_moedl.py to the save directory 
+        # for loading trust_remote_code=True
+        save_dir = Path(save_directory)
+        if not save_dir.is_dir():
+            logger.warning(f"Moedl: save_pretrained did not create {save_dir}; skipping remote-code file copy.")
+            return
+        src_dir = Path(__file__).resolve().parent
+        shutil.copy2(src_dir / "configuration_moedl.py", save_dir / "configuration_moedl.py")
+        shutil.copy2(src_dir / "modeling_moedl.py", save_dir / "modeling_moedl.py")
+
 
 # Copied from transformers.models.llama.modeling_llama.LlamaModel with Llama->Moedl
 class Moedl(MoedlPreTrainedModel):

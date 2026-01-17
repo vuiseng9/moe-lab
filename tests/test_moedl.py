@@ -9,6 +9,8 @@ Tests cover:
 import pytest
 import torch
 import torch.nn as nn
+import subprocess
+import sys
 from transformers import AutoModelForCausalLM, AutoConfig
 
 from moelab.moedl import MoedlConfig, MoedlForCausalLM, Moedl
@@ -1814,6 +1816,302 @@ class TestMoedlMoeCapacityFactor:
                 assert layer.moe.n_drop >= 0
                 # With lb_gamma, e_score_bias should exist
                 assert hasattr(layer.moe, 'e_score_bias')
+
+
+class TestMoedlSaveLoadTrustRemoteCode:
+    """Test save/load functionality with trust_remote_code."""
+    
+    @pytest.fixture
+    def tiny_moe_config(self):
+        """Create a tiny MoE model config for save/load testing."""
+        return MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            max_position_embeddings=128,
+            num_experts=4,
+            num_active_experts=2,
+            num_shared_experts=1,
+            lb_coeff=0.01,
+        )
+    
+    @pytest.fixture
+    def tiny_dense_config_for_save(self):
+        """Create a tiny dense model config for save/load testing."""
+        return MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            max_position_embeddings=128,
+            num_experts=1,
+            num_active_experts=1,
+        )
+    
+    def test_save_includes_custom_code_files(self, tmp_path, tiny_moe_config):
+        """Test that save_pretrained copies modeling and config files."""
+        model = MoedlForCausalLM(tiny_moe_config)
+        save_dir = tmp_path / "moedl_checkpoint"
+        
+        # Save the model
+        model.save_pretrained(save_dir)
+        
+        # Check that custom code files were copied
+        assert (save_dir / "configuration_moedl.py").exists()
+        assert (save_dir / "modeling_moedl.py").exists()
+        assert (save_dir / "config.json").exists()
+        assert (save_dir / "model.safetensors").exists() or (save_dir / "pytorch_model.bin").exists()
+    
+    def test_config_has_automap(self, tiny_moe_config):
+        """Test that config includes auto_map for remote code loading."""
+        config = tiny_moe_config
+        assert hasattr(config, 'auto_map')
+        assert 'AutoConfig' in config.auto_map
+        assert 'AutoModelForCausalLM' in config.auto_map
+        assert config.auto_map['AutoConfig'] == 'configuration_moedl.MoedlConfig'
+        assert config.auto_map['AutoModelForCausalLM'] == 'modeling_moedl.MoedlForCausalLM'
+    
+    def test_load_fails_without_trust_remote_code(self, tmp_path, tiny_moe_config):
+        """Test that loading fails when trust_remote_code=False.
+        
+        This test runs in a subprocess to ensure moelab is not already imported,
+        which would make the model class available even without trust_remote_code.
+        """
+        # Save model using moe-lab
+        model = MoedlForCausalLM(tiny_moe_config)
+        save_dir = tmp_path / "moedl_checkpoint"
+        model.save_pretrained(save_dir)
+        
+        # Test loading in subprocess without trust_remote_code
+        test_code = f"""
+import sys
+from transformers import AutoModelForCausalLM
+
+try:
+    model = AutoModelForCausalLM.from_pretrained(
+        r"{save_dir}",
+        trust_remote_code=False
+    )
+    sys.exit(1)  # Should not reach here
+except (ValueError, OSError) as e:
+    # Expected behavior - model requires trust_remote_code
+    sys.exit(0)
+except Exception as e:
+    print(f"Unexpected exception: {{type(e).__name__}}: {{e}}")
+    sys.exit(2)
+"""
+        
+        result = subprocess.run(
+            [sys.executable, "-c", test_code],
+            capture_output=True,
+            text=True
+        )
+        
+        # Exit code 0 means it raised the expected exception
+        # Exit code 1 means it loaded successfully (test failed)
+        # Exit code 2 means unexpected exception
+        if result.returncode == 1:
+            pytest.fail("Model loaded successfully without trust_remote_code=True, but should have failed")
+        elif result.returncode == 2:
+            pytest.fail(f"Unexpected exception in subprocess:\n{result.stdout}\n{result.stderr}")
+        
+        assert result.returncode == 0, f"Test failed with unexpected return code: {result.returncode}"
+    
+    def test_load_succeeds_with_trust_remote_code(self, tmp_path, tiny_moe_config):
+        """Test that loading succeeds when trust_remote_code=True.
+        
+        This test runs in a subprocess to ensure clean loading environment.
+        """
+        # Save model using moe-lab
+        original_model = MoedlForCausalLM(tiny_moe_config)
+        save_dir = tmp_path / "moedl_checkpoint"
+        original_model.save_pretrained(save_dir)
+        
+        # Test loading in subprocess with trust_remote_code=True
+        test_code = f"""
+import sys
+from transformers import AutoModelForCausalLM
+
+try:
+    model = AutoModelForCausalLM.from_pretrained(
+        r"{save_dir}",
+        trust_remote_code=True
+    )
+    # Verify it's the correct model type
+    assert model.__class__.__name__ == 'MoedlForCausalLM', f"Expected MoedlForCausalLM, got {{model.__class__.__name__}}"
+    assert model.config.num_experts == {tiny_moe_config.num_experts}
+    assert model.config.num_active_experts == {tiny_moe_config.num_active_experts}
+    sys.exit(0)  # Success
+except Exception as e:
+    print(f"Failed to load with trust_remote_code=True: {{type(e).__name__}}: {{e}}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"""
+        
+        result = subprocess.run(
+            [sys.executable, "-c", test_code],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            pytest.fail(f"Failed to load model with trust_remote_code=True:\n{result.stdout}\n{result.stderr}")
+    
+    def test_loaded_model_forward_pass(self, tmp_path, tiny_moe_config):
+        """Test that loaded model can perform forward pass correctly."""
+        # Save model using moe-lab
+        original_model = MoedlForCausalLM(tiny_moe_config)
+        save_dir = tmp_path / "moedl_checkpoint"
+        original_model.save_pretrained(save_dir)
+        
+        # Load with trust_remote_code=True
+        loaded_model = AutoModelForCausalLM.from_pretrained(
+            save_dir,
+            trust_remote_code=True
+        )
+        
+        # Test forward pass
+        batch_size, seq_len = 2, 16
+        input_ids = torch.randint(0, tiny_moe_config.vocab_size, (batch_size, seq_len))
+        
+        original_model.eval()
+        loaded_model.eval()
+        
+        with torch.no_grad():
+            original_output = original_model(input_ids)
+            loaded_output = loaded_model(input_ids)
+        
+        # Outputs should match
+        torch.testing.assert_close(
+            original_output.logits,
+            loaded_output.logits,
+            rtol=1e-5,
+            atol=1e-6
+        )
+    
+    def test_loaded_model_generation(self, tmp_path, tiny_moe_config):
+        """Test that loaded model can generate text."""
+        # Save model using moe-lab
+        original_model = MoedlForCausalLM(tiny_moe_config)
+        save_dir = tmp_path / "moedl_checkpoint"
+        original_model.save_pretrained(save_dir)
+        
+        # Load with trust_remote_code=True
+        loaded_model = AutoModelForCausalLM.from_pretrained(
+            save_dir,
+            trust_remote_code=True
+        )
+        
+        loaded_model.eval()
+        
+        # Test generation
+        input_ids = torch.randint(0, tiny_moe_config.vocab_size, (1, 5))
+        
+        with torch.no_grad():
+            generated = loaded_model.generate(
+                input_ids,
+                max_new_tokens=10,
+                do_sample=False,
+            )
+        
+        # Should generate tokens
+        assert generated.shape[1] == input_ids.shape[1] + 10
+    
+    def test_dense_model_save_load(self, tmp_path, tiny_dense_config_for_save):
+        """Test save/load for dense (non-MoE) model."""
+        # Save dense model
+        original_model = MoedlForCausalLM(tiny_dense_config_for_save)
+        save_dir = tmp_path / "moedl_dense_checkpoint"
+        original_model.save_pretrained(save_dir)
+        
+        # Load with trust_remote_code=True
+        loaded_model = AutoModelForCausalLM.from_pretrained(
+            save_dir,
+            trust_remote_code=True
+        )
+        
+        # Verify it's correct
+        assert loaded_model.__class__.__name__ == 'MoedlForCausalLM'
+        assert loaded_model.config.num_experts == 1
+        assert loaded_model.config.num_active_experts == 1
+        
+        # Test forward pass matches
+        input_ids = torch.randint(0, 500, (2, 16))
+        original_model.eval()
+        loaded_model.eval()
+        
+        with torch.no_grad():
+            original_output = original_model(input_ids)
+            loaded_output = loaded_model(input_ids)
+        
+        torch.testing.assert_close(
+            original_output.logits,
+            loaded_output.logits,
+            rtol=1e-5,
+            atol=1e-6
+        )
+    
+    def test_config_roundtrip(self, tmp_path, tiny_moe_config):
+        """Test that config can be saved and loaded correctly."""
+        model = MoedlForCausalLM(tiny_moe_config)
+        save_dir = tmp_path / "moedl_checkpoint"
+        model.save_pretrained(save_dir)
+        
+        # Load config with trust_remote_code=True
+        loaded_config = AutoConfig.from_pretrained(
+            save_dir,
+            trust_remote_code=True
+        )
+        
+        # Verify all MoE-specific config values
+        assert loaded_config.num_experts == tiny_moe_config.num_experts
+        assert loaded_config.num_active_experts == tiny_moe_config.num_active_experts
+        assert loaded_config.num_shared_experts == tiny_moe_config.num_shared_experts
+        assert loaded_config.lb_coeff == tiny_moe_config.lb_coeff
+        assert loaded_config.capacity_factor == tiny_moe_config.capacity_factor
+    
+    def test_load_with_lb_gamma(self, tmp_path):
+        """Test save/load with lb_gamma load balancing strategy."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=4,
+            num_active_experts=2,
+            lb_gamma=0.01,  # Using lb_gamma instead of lb_coeff
+        )
+        
+        original_model = MoedlForCausalLM(config)
+        save_dir = tmp_path / "moedl_lb_gamma"
+        original_model.save_pretrained(save_dir)
+        
+        # Load with trust_remote_code=True
+        loaded_model = AutoModelForCausalLM.from_pretrained(
+            save_dir,
+            trust_remote_code=True
+        )
+        
+        # Verify lb_gamma configuration
+        assert loaded_model.config.lb_gamma == 0.01
+        assert loaded_model.config.lb_coeff == 0.0
+        
+        # Test forward pass
+        input_ids = torch.randint(0, 500, (2, 16))
+        loaded_model.eval()
+        
+        with torch.no_grad():
+            outputs = loaded_model(input_ids)
+        
+        assert outputs.logits is not None
+        assert outputs.router_logits is not None
 
 
 if __name__ == "__main__":
