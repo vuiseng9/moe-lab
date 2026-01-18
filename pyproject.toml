@@ -19,6 +19,7 @@ dependencies = [
   "evaluate",
   "tabulate",
   "humanize",
+  "matplotlib",
   "wandb",
   "neo-clm @ git+https://github.com/vuiseng9/neo-clm.git",
 ]
