@@ -207,13 +207,13 @@ class MoedlPerStepCallback(TrainerCallback):
             self.trainer.last_lb_bias_dbg = self.lb_ctrl(self.expert_load.avg.mean(dim=-2))
 
         if self.trainer.wandb:
+            # model-wide expert load
+            # this is good high-level overview,
+            # but may get smoothed out
+            # check heatmap for detailed per layer per k slot view
             d = {}
-            layer = 0
-            # intentionally only log layer 0 stats
-            # more layers will bloat the logging 
-            # global stats may get smoothed out over layers
-            for i, frac in enumerate(self.expert_load.avg.mean(dim=-2)[layer].tolist()):
-                d[f"moe/load/layer_{layer}/e{i:03d}"] = round(frac, 3)
+            for i, frac in enumerate(self.expert_load.avg.mean(dim=-2).mean(dim=0).tolist()):
+                d[f"moe/load/e{i:03d}"] = round(frac, 3)
             d[f"lb_loss"] = self.trainer.last_lb_loss
             d[f"token_drop_ratio"] = self.trainer.last_drop_ratio
             d[f"token_drop_count"] = self.trainer.last_drop_count

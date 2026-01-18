@@ -92,6 +92,21 @@ _moedl-dense-ts:
 	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=1e-3
 
 
+_ablate-num-experts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides lb_coeff=0.0,lb_gamma=0.01,num_experts=$(E),num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+z1_moedl_e2_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=2 lr=8e-4
+z2_moedl_e4_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=4 lr=8e-4
+z3_moedl_e8_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=8 lr=8e-4
+z4_moedl_e16_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=16 lr=8e-4
+
+
 _ablate-load-balance:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
@@ -108,7 +123,7 @@ a2_moedl_lb_biasing:
 _ablate-moe-resolution:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
-		--config_overrides lb_coeff=0.01,num_experts=$(E),num_active_experts=$(K),intermediate_size=$(Dff),num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--config_overrides lb_gamma=0.01,num_experts=$(E),num_active_experts=$(K),intermediate_size=$(Dff),num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 b1_moedl_e8_k1:
 	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=8  K=1 Dff=2048 lr=8e-4
@@ -123,7 +138,7 @@ b4_moedl_e64_k8:
 _ablate-shared-experts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
-		--config_overrides lb_coeff=0.01,num_experts=$$((32-$(ES))),num_active_experts=$$((4-$(ES))),num_shared_experts=$(ES),intermediate_size=512,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--config_overrides lb_gamma=0.01,num_experts=$$((32-$(ES))),num_active_experts=$$((4-$(ES))),num_shared_experts=$(ES),intermediate_size=512,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 c1_moedl_s0_k4_e32:
 	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=0 lr=8e-4
@@ -138,7 +153,7 @@ c4_moedl_s3_k1_e29:
 _ablate-token-drop:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
-		--config_overrides capacity_factor=$(CF),lb_coeff=0.01,num_experts=8,num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--config_overrides capacity_factor=$(CF),lb_gamma=0.01,num_experts=8,num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 d1_moedl_cf_1.0:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=1.0 lr=8e-4
