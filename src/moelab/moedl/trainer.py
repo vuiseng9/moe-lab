@@ -35,6 +35,7 @@ class MoedlTrainer(MoelabTrainer):
         self.expert_load = None
         self.last_lb_loss = math.nan
         self.last_drop_ratio = math.nan
+        self.last_drop_count = math.nan
         self.last_lb_bias_dbg = math.nan
         self.moe_log_metrics = deque(maxlen=1)
 
@@ -87,6 +88,7 @@ class MoedlTrainer(MoelabTrainer):
                 global_n_drop = sum([m.n_drop for m in self.moe_modules.values()])
                 global_n_routes = int(num_items_in_batch * self.L * self.K)
                 self.last_drop_ratio = round(global_n_drop / global_n_routes, 4)
+                self.last_drop_count = global_n_drop
                 # If we need per expert instance drop stats, we can compute here:
                 # global_n_experts = self.E * self.L
                 # n_drop_per_e = global_n_drop / global_n_experts
@@ -185,6 +187,7 @@ class MoedlPerStepCallback(TrainerCallback):
                 d[f"moe/load/layer_{layer}/e{i:03d}"] = round(frac, 3)
             d[f"lb_loss"] = self.trainer.last_lb_loss
             d[f"token_drop_ratio"] = self.trainer.last_drop_ratio
+            d[f"token_drop_count"] = self.trainer.last_drop_count
             d[f"lb_bias_dbg"] = self.trainer.last_lb_bias_dbg
             # Trainer.log will automatically prepend train/
             self.moe_log_metrics.append(d)
@@ -194,4 +197,4 @@ class MoedlPerStepCallback(TrainerCallback):
     def reset_meters(self):
         self.routing_stat.reset()
         self.expert_load.reset()
-
+        

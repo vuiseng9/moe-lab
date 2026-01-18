@@ -820,7 +820,7 @@ class TestMoedlTrainerCapacityFactor:
         )
     
     def test_capacity_logging_disabled_when_cf_zero(self, moe_model_config, tmp_path, tiny_dataset):
-        """Test that token_drop_ratio is NaN when capacity_factor=0."""
+        """Test that token_drop_ratio and token_drop_count are NaN when capacity_factor=0."""
         model = MoedlForCausalLM(moe_model_config)
         
         mock_wandb = Mock()
@@ -849,9 +849,11 @@ class TestMoedlTrainerCapacityFactor:
         import math
         assert math.isnan(trainer.last_drop_ratio), \
             "token_drop_ratio should be NaN when capacity_factor=0"
+        assert math.isnan(trainer.last_drop_count), \
+            "token_drop_count should be NaN when capacity_factor=0"
     
     def test_capacity_logging_enabled_when_cf_nonzero(self, moe_config_with_capacity, tmp_path, tiny_dataset):
-        """Test that token_drop_ratio is logged when capacity_factor>0."""
+        """Test that token_drop_ratio and token_drop_count are logged when capacity_factor>0."""
         model = MoedlForCausalLM(moe_config_with_capacity)
         
         mock_wandb = Mock()
@@ -882,6 +884,10 @@ class TestMoedlTrainerCapacityFactor:
             "token_drop_ratio should be a number when capacity_factor>0"
         assert trainer.last_drop_ratio >= 0.0, \
             "token_drop_ratio should be non-negative"
+        assert not math.isnan(trainer.last_drop_count), \
+            "token_drop_count should be a number when capacity_factor>0"
+        assert trainer.last_drop_count >= 0, \
+            "token_drop_count should be non-negative"
     
     def test_capacity_n_drop_counter_updates(self, moe_config_with_capacity, tiny_dataset):
         """Test that n_drop counters are tracked per layer."""
@@ -977,9 +983,10 @@ class TestMoedlTrainerCapacityFactor:
         # Train for one step to trigger callback logging
         trainer.train()
         
-        # Check trainer's internal state - should log both token_drop_ratio and load balancing metrics
+        # Check trainer's internal state - should log both token_drop_ratio, token_drop_count, and load balancing metrics
         import math
         assert not math.isnan(trainer.last_drop_ratio), "token_drop_ratio should be valid"
+        assert not math.isnan(trainer.last_drop_count), "token_drop_count should be valid"
         assert not math.isnan(trainer.last_lb_loss), "lb_loss should be valid"
         assert trainer.last_lb_loss >= 0.0, "lb_loss should be non-negative"
     
@@ -1020,9 +1027,10 @@ class TestMoedlTrainerCapacityFactor:
         # Train for one step to trigger callback logging
         trainer.train()
         
-        # Check trainer's internal state - should log both token_drop_ratio and bias adjustment metrics
+        # Check trainer's internal state - should log both token_drop_ratio, token_drop_count, and bias adjustment metrics
         import math
         assert not math.isnan(trainer.last_drop_ratio), "token_drop_ratio should be valid"
+        assert not math.isnan(trainer.last_drop_count), "token_drop_count should be valid"
         assert not math.isnan(trainer.last_lb_bias_dbg), "lb_bias_dbg should be valid"
         assert trainer.last_lb_bias_dbg >= 0.0, "lb_bias_dbg should be non-negative"
 
