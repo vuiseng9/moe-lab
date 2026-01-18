@@ -1214,5 +1214,127 @@ class TestMoedlTrainerGradientAccumulation:
         assert trainer.expert_load is not None
 
 
+class TestMoedlTrainerEvaluation:
+    """Test MoedlTrainer behavior during evaluation mode."""
+    
+    def test_trainer_evaluation_with_lb_coeff(self, tmp_path, tiny_dataset):
+        """Test that trainer.evaluate() works correctly with lb_coeff enabled.
+        
+        BUG: During evaluation, outputs.aux_loss is None (correct behavior after fix),
+        but trainer.compute_loss() tries to call outputs.aux_loss.detach().item()
+        which will crash with AttributeError.
+        
+        This test will FAIL with the current buggy implementation and PASS
+        once the bug is fixed.
+        """
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=4,
+            num_active_experts=2,
+            lb_coeff=0.01,  # Load balancing enabled
+        )
+        model = MoedlForCausalLM(config)
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_eval_batch_size=2,
+            report_to=[],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            eval_dataset=tiny_dataset,
+        )
+        
+        # This should not crash even though aux_loss is None during eval
+        results = trainer.evaluate()
+        
+        # Verify evaluation completed successfully
+        assert "eval_loss" in results
+        assert results["eval_loss"] >= 0
+        
+        # During evaluation, last_lb_loss should remain NaN (not updated)
+        import math
+        assert math.isnan(trainer.last_lb_loss), \
+            "lb_loss should not be updated during evaluation"
+    
+    def test_trainer_evaluation_with_capacity_factor(self, tmp_path, tiny_dataset):
+        """Test that trainer.evaluate() works correctly with capacity_factor enabled."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=4,
+            num_active_experts=2,
+            capacity_factor=1.0,
+        )
+        model = MoedlForCausalLM(config)
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_eval_batch_size=2,
+            report_to=[],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            eval_dataset=tiny_dataset,
+        )
+        
+        # This should work fine - capacity tracking doesn't depend on aux_loss
+        results = trainer.evaluate()
+        
+        # Verify evaluation completed successfully
+        assert "eval_loss" in results
+        assert results["eval_loss"] >= 0
+        
+        # Capacity metrics are tracked per forward pass, so they'll be updated
+        # but we don't log them during eval in wandb
+        import math
+        assert not math.isnan(trainer.last_drop_ratio), \
+            "drop_ratio can be tracked during eval (per forward pass)"
+    
+    def test_trainer_evaluation_with_lb_gamma(self, tmp_path, tiny_dataset):
+        """Test that trainer.evaluate() works correctly with lb_gamma enabled."""
+        config = MoedlConfig(
+            vocab_size=1000,
+            hidden_size=128,
+            intermediate_size=256,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=4,
+            num_active_experts=2,
+            lb_gamma=0.01,  # Bias-based load balancing
+        )
+        model = MoedlForCausalLM(config)
+        
+        training_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            per_device_eval_batch_size=2,
+            report_to=[],
+        )
+        
+        trainer = MoedlTrainer(
+            model=model,
+            args=training_args,
+            eval_dataset=tiny_dataset,
+        )
+        
+        # This should work - lb_gamma doesn't use aux_loss
+        results = trainer.evaluate()
+        
+        # Verify evaluation completed successfully
+        assert "eval_loss" in results
+        assert results["eval_loss"] >= 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

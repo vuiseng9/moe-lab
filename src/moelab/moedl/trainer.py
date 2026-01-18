@@ -80,7 +80,7 @@ class MoedlTrainer(MoelabTrainer):
             # frac is expert load per k slot per layer
             # reduce over k (dim=-2) by mean (each k slot attends same total number of tokens)
 
-            if self.cfg.lb_coeff > 0:
+            if self.model.training and self.cfg.lb_coeff > 0:
                 self.last_lb_loss = round(outputs.aux_loss.detach().item(), 6)
 
             if self.CF > 0:

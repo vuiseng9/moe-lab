@@ -2114,6 +2114,162 @@ except Exception as e:
         assert outputs.router_logits is not None
 
 
+# ========================================
+# Load Balancing Loss Evaluation Bug Tests
+# ========================================
+
+def test_load_balancing_loss_not_computed_during_eval():
+    """Test that load balancing loss is NOT computed during evaluation mode.
+    
+    BUG: load_balancing_loss_func is called whenever loss is not None,
+    which happens when labels are provided during evaluation.
+    It should ONLY be computed during training.
+    
+    This test will FAIL with the current buggy implementation and PASS
+    once the bug is fixed.
+    """
+    # Create a small MoE model with load balancing enabled
+    config = MoedlConfig(
+        vocab_size=1000,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        num_experts=4,  # MoE with 4 experts
+        num_active_experts=2,  # Top-2 routing
+        lb_coeff=0.01,  # Load balancing enabled with non-zero coefficient
+        pad_token_id=0,
+    )
+    
+    model = MoedlForCausalLM(config)
+    model.eval()  # Set to evaluation mode
+    
+    # Create dummy input with labels (typical for evaluation with loss computation)
+    batch_size = 2
+    seq_len = 8
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+    labels = input_ids.clone()
+    
+    # Forward pass in eval mode
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, labels=labels)
+    
+    # The bug: aux_loss (load balancing loss) should be None or 0 during eval
+    # but currently it's computed because labels are provided
+    assert outputs.aux_loss is None or outputs.aux_loss == 0, \
+        f"Load balancing loss should NOT be computed during evaluation! " \
+        f"Got aux_loss={outputs.aux_loss}, but expected None or 0. " \
+        f"model.training={model.training}"
+
+
+def test_load_balancing_loss_computed_during_training():
+    """Test that load balancing loss IS computed during training mode."""
+    # Create a small MoE model with load balancing enabled
+    config = MoedlConfig(
+        vocab_size=1000,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        num_experts=4,
+        num_active_experts=2,
+        lb_coeff=0.01,  # Load balancing enabled
+        pad_token_id=0,
+    )
+    
+    model = MoedlForCausalLM(config)
+    model.train()  # Set to training mode
+    
+    # Create dummy input with labels
+    batch_size = 2
+    seq_len = 8
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+    labels = input_ids.clone()
+    
+    # Forward pass in training mode
+    outputs = model(input_ids=input_ids, labels=labels)
+    
+    # During training with lb_coeff > 0, aux_loss should be computed
+    assert outputs.aux_loss is not None, \
+        "Load balancing loss should be computed during training!"
+    assert outputs.aux_loss > 0, \
+        f"Load balancing loss should be positive during training! Got {outputs.aux_loss}"
+
+
+def test_load_balancing_loss_not_computed_when_lb_coeff_zero():
+    """Test that load balancing loss is NOT computed when lb_coeff=0."""
+    # Create model with lb_coeff=0 (load balancing disabled)
+    config = MoedlConfig(
+        vocab_size=1000,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        num_experts=4,
+        num_active_experts=2,
+        lb_coeff=0.0,  # Load balancing DISABLED
+        pad_token_id=0,
+    )
+    
+    model = MoedlForCausalLM(config)
+    model.train()  # Even in training mode
+    
+    # Create dummy input with labels
+    batch_size = 2
+    seq_len = 8
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+    labels = input_ids.clone()
+    
+    # Forward pass
+    outputs = model(input_ids=input_ids, labels=labels)
+    
+    # With lb_coeff=0, aux_loss should be None
+    assert outputs.aux_loss is None, \
+        f"Load balancing loss should NOT be computed when lb_coeff=0! Got {outputs.aux_loss}"
+
+
+def test_training_vs_eval_mode_consistency():
+    """Test that model behaves correctly in both training and eval modes."""
+    config = MoedlConfig(
+        vocab_size=1000,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        num_experts=4,
+        num_active_experts=2,
+        lb_coeff=0.01,
+        pad_token_id=0,
+    )
+    
+    model = MoedlForCausalLM(config)
+    
+    batch_size = 2
+    seq_len = 8
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+    labels = input_ids.clone()
+    
+    # Training mode
+    model.train()
+    with torch.no_grad():  # Disable gradients for comparison
+        train_outputs = model(input_ids=input_ids, labels=labels)
+    
+    # Eval mode
+    model.eval()
+    with torch.no_grad():
+        eval_outputs = model(input_ids=input_ids, labels=labels)
+    
+    # Main loss should be similar (not identical due to potential dropout)
+    # but aux_loss should differ
+    assert train_outputs.aux_loss is not None, "Training should have aux_loss"
+    assert eval_outputs.aux_loss is None or eval_outputs.aux_loss == 0, \
+        f"Eval should NOT have aux_loss! Got {eval_outputs.aux_loss}"
+
+
 if __name__ == "__main__":
     # Allow running tests directly
     pytest.main([__file__, "-v"])
