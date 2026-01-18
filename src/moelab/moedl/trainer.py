@@ -7,15 +7,24 @@ from moelab.moedl import MoeBlk
 from moelab.trainer import MoelabTrainer
 from moelab.utils import TensorMeter
 from transformers import TrainerCallback
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
+import os
+import numpy as np
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
 class MoedlTrainer(MoelabTrainer):
     """ MoedlTrainer is a specialized trainer for Moedl model type. """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, heatmap_on: bool = True, heatmap_freq: int = 10, **kwargs):
         super().__init__(*args, **kwargs)
         
+        self.heatmap_on = heatmap_on
+        self.heatmap_freq = heatmap_freq
+
         model = self.model.module if hasattr(self.model, "module") else self.model
         self._cfg = model.config
         
@@ -172,6 +181,26 @@ class MoedlPerStepCallback(TrainerCallback):
         # directly updating logs object in trainer.log()
         # we use a deque to cache the moe metrics during on_step_end.
 
+        # Heatmap of expert load
+        # designed to be non-blocking to minimize overhead on training step
+        self.heatmapper = None
+        self.heatmap_freq = None
+        self.semaphore = threading.Semaphore(1)
+        
+        if self.trainer.heatmap_on:
+            # one thread should be sufficient
+            # only one busy at a time, skip generation if previous not done
+            self.heatmapper = ThreadPoolExecutor(max_workers=1)
+            self.heatmap_freq = self.trainer.heatmap_freq
+            self.semaphore = threading.Semaphore(1) 
+            # semaphore as a means of /skipping
+            # heatmap generation if previous not done
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if self.heatmapper:
+            self.heatmap_outdir = f"{args.output_dir}/heatmap"
+            os.makedirs(self.heatmap_outdir, exist_ok=True)
+
     def on_step_end(self, args, state, control, **kwargs):
         # apply load balance bias adjustment (only if gamma > 0)
         if self.lb_ctrl.gamma > 0:
@@ -192,9 +221,61 @@ class MoedlPerStepCallback(TrainerCallback):
             # Trainer.log will automatically prepend train/
             self.moe_log_metrics.append(d)
         
+            # note that global_step has already been incremented 
+            # prior to on step end
+            gstep = state.global_step - 1
+            if self.heatmapper and gstep % self.heatmap_freq == 0:
+                if self.semaphore.acquire(blocking=False):
+                    self.heatmapper.submit(
+                        self._generate_expert_load_heatmap,
+                        self.expert_load.avg.detach().cpu().numpy(),
+                        gstep,
+                        f"{self.heatmap_outdir}/gstep_{gstep:06}_expert_load.png"
+                    )
+
         self.reset_meters()
 
     def reset_meters(self):
         self.routing_stat.reset()
         self.expert_load.reset()
-        
+    
+    def on_train_end(self, args, state, control, **kwargs):
+        self.heatmapper.shutdown(wait=True)
+
+    def _generate_expert_load_heatmap(self, np_arr, step, file_path):
+        try:
+            # check numpy array and shape
+            assert isinstance(np_arr, np.ndarray), "Input must be a numpy array"
+            assert np_arr.ndim == 3, "Input tensor must be 3D (L, K, E)"
+            
+            L, K, E = np_arr.shape
+            np_arr = np_arr.reshape(L*K, E)
+            
+            balance = 100 / E 
+
+            abs_imbalance = np.abs(np_arr*100 - balance)
+
+            fig, ax = plt.subplots(figsize=(8, 6))
+            
+            im = ax.imshow(abs_imbalance, cmap='Reds', vmin=0.0, vmax=50.0)
+            
+            for i in range(np_arr.shape[0]):
+                for j in range(np_arr.shape[1]):
+                    ax.text(j, i, f"{abs_imbalance[i, j]:.1f}",
+                            ha="center", va="center", color="black", fontsize=8)
+            
+            y_labels = [f"l{l},k{k}" for l in range(L) for k in range(K)]
+            ax.set_yticks(range(len(y_labels)))
+            ax.set_yticklabels(y_labels)
+            ax.set_ylabel('Layer, K-slot')
+            ax.set_xlabel('Expert Id')
+
+            ax.set_title(f'Step {step}\n\nAbs. Delta from Uniform Expert Load ({balance:.1f}%)')
+            fig.colorbar(im, ax=ax)
+            plt.savefig(file_path)
+            plt.close(fig)
+        except Exception as e:
+            logger.error(f"Error generating expert load heatmap at step {step}: {e}")
+        finally:
+            # always release even error
+            self.semaphore.release()
