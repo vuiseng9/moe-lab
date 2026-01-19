@@ -82,6 +82,7 @@ class TestMoedlTrainerProperties:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # First access should set the cache
@@ -99,6 +100,7 @@ class TestMoedlTrainerProperties:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         assert trainer.is_moe is False
@@ -112,6 +114,7 @@ class TestMoedlTrainerProperties:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         assert trainer.is_moe is True
@@ -125,6 +128,7 @@ class TestMoedlTrainerProperties:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # First access
@@ -144,6 +148,7 @@ class TestMoedlTrainerDenseModel:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Get a batch
@@ -169,6 +174,7 @@ class TestMoedlTrainerDenseModel:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Mock wandb
@@ -197,6 +203,7 @@ class TestMoedlTrainerMoeModel:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         batch = {
@@ -223,6 +230,7 @@ class TestMoedlTrainerMoeModel:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         batch = {
@@ -258,6 +266,7 @@ class TestMoedlTrainerMoeModel:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Mock wandb on the trainer (callback will use trainer.wandb)
@@ -294,6 +303,7 @@ class TestMoedlTrainerMoeModel:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         mock_wandb = Mock()
@@ -318,6 +328,7 @@ class TestMoedlTrainerExpertStats:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         batch = {
@@ -347,6 +358,7 @@ class TestMoedlTrainerExpertStats:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         batch_size, seq_len = 2, 5
@@ -376,6 +388,7 @@ class TestMoedlTrainerExpertStats:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         batch = {
@@ -403,6 +416,7 @@ class TestMoedlTrainerExpertStats:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         batch_size, seq_len = 2, 5
@@ -450,6 +464,7 @@ class TestMoedlTrainerIntegration:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Mock wandb
@@ -470,6 +485,7 @@ class TestMoedlTrainerIntegration:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         batch = {
@@ -530,6 +546,7 @@ class TestMoedlTrainerBiasAdjustment:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Verify no e_score_bias buffers exist
@@ -566,6 +583,7 @@ class TestMoedlTrainerBiasAdjustment:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Train for one step
@@ -601,6 +619,7 @@ class TestMoedlTrainerBiasAdjustment:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Verify no e_score_bias buffers exist
@@ -645,6 +664,7 @@ class TestMoedlTrainerBiasAdjustment:
             model=model,
             args=training_args,
             train_dataset=tiny_dataset,
+            heatmap_on=False,
         )
         
         # Get initial bias for expert 0
@@ -675,6 +695,7 @@ class TestMoedlTrainerBiasAdjustment:
             model=model,
             args=TrainingArguments(output_dir="/tmp", max_steps=1, report_to=[]),
             train_dataset=Dataset.from_dict({"input_ids": [[1, 2]], "labels": [[1, 2]]}),
+            heatmap_on=False,
         )
         
         # Create mock load per expert: layer 0 heavily loaded on expert 0
@@ -1843,6 +1864,96 @@ class TestMoedlTrainerHeatmap:
         expected_e1 = abs((1.0 - 0.5) / 7 * 100 - balance_pct)
         assert np.isclose(delta_e1, expected_e1, atol=0.1), \
             f"Delta should be {expected_e1}% for reduced expert, got {delta_e1}"
+    
+    def test_gif_generation_on_train_end(self, moe_model_config, tmp_path, tiny_dataset):
+        """Test that GIF is generated after training ends."""
+        import os
+        from pathlib import Path
+        
+        # Setup training args for short training
+        train_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            max_steps=5,  # Only 5 steps
+            logging_steps=1,
+            save_steps=100,
+            report_to=[],  # No wandb but we'll mock it
+            use_cpu=True,
+        )
+        
+        model = MoedlForCausalLM(moe_model_config)
+        trainer = MoedlTrainer(
+            model=model,
+            args=train_args,
+            train_dataset=tiny_dataset,
+            heatmap_on=True,
+            heatmap_freq=1,  # Generate heatmap every step
+        )
+        
+        # Mock wandb handler to enable heatmap generation
+        mock_wandb = Mock()
+        mock_wandb.log = Mock()
+        trainer._wb_handler = mock_wandb
+        
+        # Run training
+        trainer.train()
+        
+        # Check if GIF exists
+        gif_path = Path(tmp_path) / "expert_load_over_train_steps.gif"
+        assert gif_path.exists(), f"GIF should be generated at {gif_path}"
+        
+        # Check if GIF is not empty
+        assert gif_path.stat().st_size > 0, "GIF file should not be empty"
+        
+        # Check if heatmap directory exists and has PNG files
+        heatmap_dir = Path(tmp_path) / "heatmap"
+        assert heatmap_dir.exists(), "Heatmap directory should exist"
+        
+        png_files = list(heatmap_dir.glob("*.png"))
+        assert len(png_files) > 0, "Should have generated PNG heatmaps"
+        # With 5 steps and freq=1, we expect up to 5 PNGs
+        # But due to threading and semaphore, we might get fewer
+        # The important thing is that at least some were generated and GIF was created
+        assert len(png_files) >= 1, f"Expected at least 1 PNG, got {len(png_files)}"
+        assert len(png_files) <= 5, f"Expected at most 5 PNGs, got {len(png_files)}"
+    
+    def test_gif_not_generated_when_heatmap_disabled(self, moe_model_config, tmp_path, tiny_dataset):
+        """Test that GIF is not generated when heatmap is disabled."""
+        import os
+        from pathlib import Path
+        
+        train_args = TrainingArguments(
+            output_dir=str(tmp_path),
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            logging_steps=1,
+            save_steps=100,
+            report_to=[],
+            use_cpu=True,
+        )
+        
+        model = MoedlForCausalLM(moe_model_config)
+        trainer = MoedlTrainer(
+            model=model,
+            args=train_args,
+            train_dataset=tiny_dataset,
+            heatmap_on=False,  # Disable heatmap
+        )
+        
+        # Run training
+        trainer.train()
+        
+        # Check that GIF does not exist
+        gif_path = Path(tmp_path) / "expert_load_over_train_steps.gif"
+        assert not gif_path.exists(), "GIF should not be generated when heatmap is disabled"
+        
+        # Check that heatmap directory doesn't exist or is empty
+        heatmap_dir = Path(tmp_path) / "heatmap"
+        if heatmap_dir.exists():
+            png_files = list(heatmap_dir.glob("*.png"))
+            assert len(png_files) == 0, "No PNG files should be generated when heatmap is disabled"
 
 
 if __name__ == "__main__":

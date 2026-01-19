@@ -30,6 +30,9 @@ dev = [
   "ruff",
 ]
 
+[project.scripts]
+pngs2gif = "moelab.utils.pngs2gif:app"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

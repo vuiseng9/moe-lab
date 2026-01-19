@@ -5,7 +5,7 @@ from collections import deque
 from dataclasses import dataclass
 from moelab.moedl import MoeBlk
 from moelab.trainer import MoelabTrainer
-from moelab.utils import TensorMeter
+from moelab.utils import TensorMeter, pngs2gif
 from transformers import TrainerCallback
 from concurrent.futures import ThreadPoolExecutor
 import threading
@@ -240,7 +240,12 @@ class MoedlPerStepCallback(TrainerCallback):
         self.expert_load.reset()
     
     def on_train_end(self, args, state, control, **kwargs):
-        self.heatmapper.shutdown(wait=True)
+        if self.heatmapper:
+            self.heatmapper.shutdown(wait=True)
+            # limit to 15s, e.g. 1500 frames at 10 fps. Auto downsample inside pngs2gif.
+            pngs2gif(folder=self.heatmap_outdir, 
+                     output=f"{args.output_dir}/expert_load_over_train_steps.gif", 
+                     downsample=None, max_len=15)
 
     def _generate_expert_load_heatmap(self, np_arr, step, file_path):
         try:
