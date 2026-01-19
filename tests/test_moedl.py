@@ -2270,6 +2270,172 @@ def test_training_vs_eval_mode_consistency():
         f"Eval should NOT have aux_loss! Got {eval_outputs.aux_loss}"
 
 
+class TestMoedlCapacityFactorGeneration:
+    """Test to expose capacity_factor bug during generation.
+    
+    During generation (LM decoding), tokens are often generated one at a time.
+    With capacity_factor > 0, expert_capacity = int((T*K/E) * capacity_factor)
+    can become 0 when T is very small, triggering assertion error or other issues.
+    
+    For example:
+    - T=1 (single token), K=2, E=8
+    - (1*2/8) * 2.0 = 0.5 -> int(0.5) = 0
+    - This triggers: "assert expert_capacity > 0"
+    """
+    
+    def test_capacity_factor_generation_single_token(self):
+        """BUG: Generation with capacity_factor > 0 fails with small batch/single token.
+        
+        This test should FAIL until the bug is fixed.
+        Expert capacity calculation breaks down when T (total tokens) is very small.
+        """
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=2.0,  # Reasonable CF, but breaks with T=1
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        # Single token input - typical for generation
+        input_ids = torch.randint(0, 500, (1, 1))
+        
+        # This should fail with assertion error:
+        # "expert_capacity must be positive. capacity_factor too small?"
+        # Because: expert_capacity = int((1*2/8) * 2.0) = int(0.5) = 0
+        with torch.no_grad():
+            try:
+                outputs = model.generate(
+                    input_ids,
+                    max_new_tokens=5,
+                    do_sample=False,
+                )
+                # If we get here, bug might be "fixed" but we should verify
+                assert outputs.shape[1] > 1, "Should generate at least one token"
+            except AssertionError as e:
+                if "expert_capacity must be positive" in str(e):
+                    pytest.fail(f"BUG CONFIRMED: {e}")
+                else:
+                    raise
+    
+    def test_capacity_factor_generation_small_batch(self):
+        """BUG: Generation with small batches and capacity_factor > 0.
+        
+        Even with slightly larger inputs, autoregressive decoding processes
+        one new token at a time, making expert_capacity calculation fragile.
+        """
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=1.5,
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        # Small batch with very short sequence
+        input_ids = torch.randint(0, 500, (2, 3))
+        
+        with torch.no_grad():
+            try:
+                outputs = model.generate(
+                    input_ids,
+                    max_new_tokens=10,
+                    do_sample=False,
+                )
+                assert outputs.shape[0] == 2
+                assert outputs.shape[1] >= 3
+            except AssertionError as e:
+                if "expert_capacity must be positive" in str(e):
+                    pytest.fail(f"BUG CONFIRMED: {e}")
+                else:
+                    raise
+    
+    def test_capacity_factor_forward_vs_generation(self):
+        """Compare forward pass (works) vs generation (may fail) with capacity_factor.
+        
+        Forward pass with small inputs works fine because all tokens are processed together.
+        Generation processes tokens incrementally, exposing the bug.
+        """
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=2.0,
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        input_ids = torch.randint(0, 500, (1, 5))
+        
+        # Forward pass should work - T=5 tokens total
+        with torch.no_grad():
+            forward_outputs = model(input_ids)
+            assert forward_outputs.logits is not None
+            # expert_capacity = int((5*2/8) * 2.0) = int(2.5) = 2 ✓
+        
+        # Generation should fail when processing new tokens one-by-one
+        # During generation, cache grows but new token T=1
+        # expert_capacity = int((1*2/8) * 2.0) = int(0.5) = 0 ✗
+        with torch.no_grad():
+            try:
+                gen_outputs = model.generate(
+                    input_ids,
+                    max_new_tokens=3,
+                    do_sample=False,
+                )
+                # If successful, check output
+                assert gen_outputs.shape[1] >= 5
+            except AssertionError as e:
+                if "expert_capacity must be positive" in str(e):
+                    pytest.fail(
+                        f"BUG CONFIRMED: Forward pass works but generation fails. "
+                        f"Error: {e}"
+                    )
+                else:
+                    raise
+    
+    def test_capacity_factor_zero_works_for_generation(self):
+        """CONTROL: capacity_factor=0 should work fine for generation."""
+        config = MoedlConfig(
+            vocab_size=500,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_experts=8,
+            num_active_experts=2,
+            capacity_factor=0.0,  # Disabled - should work
+        )
+        model = MoedlForCausalLM(config)
+        model.eval()
+        
+        input_ids = torch.randint(0, 500, (1, 1))
+        
+        with torch.no_grad():
+            outputs = model.generate(
+                input_ids,
+                max_new_tokens=10,
+                do_sample=False,
+            )
+        
+        assert outputs.shape[0] == 1
+        assert outputs.shape[1] == 11  # 1 input + 10 generated
+
+
 if __name__ == "__main__":
     # Allow running tests directly
     pytest.main([__file__, "-v"])

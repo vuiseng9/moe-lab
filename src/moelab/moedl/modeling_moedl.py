@@ -222,7 +222,7 @@ class MoeBlk(nn.Module):
         # Expert Capacity
         expert_capacity = None 
         self.n_drop = 0 # reset every forward
-        if self.capacity_factor > 0:
+        if self.training and self.capacity_factor > 0:
             expert_capacity = int( (T*K/E) * self.capacity_factor )
             assert expert_capacity > 0, "expert_capacity must be positive. capacity_factor too small?"
 
