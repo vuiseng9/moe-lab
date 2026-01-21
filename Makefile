@@ -25,7 +25,7 @@ ckpt ?= roneneldan/TinyStories-33M
 #    and cause overlapping jobs on same GPU.
 
 ifeq ($(sweep_lr),1)
-WANDB_PROJECT := $(WANDB_PROJECT)-sweeplr
+WANDB_PROJECT := sweeplr-$(WANDB_PROJECT)
 extra_args += --sweep_lr 1e-3,3e-3,5e-3,8e-3,1e-4,3e-4,5e-4,8e-4,1e-5,3e-5,5e-5,8e-5 --sweep_lr_steps 150 --warmup_steps 30
 endif
 
@@ -58,19 +58,23 @@ run-tests: gpulist-check-busy
 gen-tinystories:
 	CUDA_VISIBLE_DEVICES=$(gpulist) neoclm-eval-ts -R $(ckpt)
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Common Pretraining Target: Moedl for TinyStories
+# ───────────────────────────────────────────────────────────────────────────────
+__pretrain-tinystories: ep ?= 2
 __pretrain-tinystories: gpulist-check-busy
 	mkdir -p $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) && \
 	WANDB_PROJECT=$(WANDB_PROJECT) \
 	CUDA_VISIBLE_DEVICES=$(gpulist) python moelab_main.py \
 		$(model_cfg) \
 		--dataset_name roneneldan/TinyStories --block_size 512 \
-		--learning_rate $(lr) --num_train_epochs 2 \
+		--learning_rate $(lr) --num_train_epochs $(ep) \
 		--do_train --do_eval \
 		--per_device_train_batch_size 128 \
 		--per_device_eval_batch_size 128 \
 		--eval_steps 500 \
 		--save_steps 2000 \
-		--logging_steps 1 \
+		--logging_steps 5 \
 		--run_name $(runlabel) \
 		--output_dir $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) \
 		$(extra_args)
@@ -80,33 +84,25 @@ _llama2-ts:
 	model_cfg="--model_type llama \
 		--config_overrides hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
-00_llama2_ref:
-	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
-
 _moedl-dense-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
 		--config_overrides num_experts=1,num_active_experts=1,hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Training Convergence Sanity between Moedl (dense) and Llama2
+# ───────────────────────────────────────────────────────────────────────────────
+00_llama2_ref:
+	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
+
 01_moedl_dense:
 	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=1e-3
 
-
-_ablate-num-experts:
-	$(MAKE) __pretrain-tinystories \
-	model_cfg="--model_type moedl \
-		--config_overrides lb_coeff=0.0,lb_gamma=0.01,num_experts=$(E),num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
-		--tokenizer_name meta-llama/Llama-2-7b-hf"
-z1_moedl_e2_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=2 lr=8e-4
-z2_moedl_e4_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=4 lr=8e-4
-z3_moedl_e8_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=8 lr=8e-4
-z4_moedl_e16_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=16 lr=8e-4
-
-
+# ───────────────────────────────────────────────────────────────────────────────
+# Load Balancing Ablations 
+# - Google's Imbalance Penalty vs DeepSeek's Load Biasing
+# ───────────────────────────────────────────────────────────────────────────────
 _ablate-load-balance:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
@@ -119,47 +115,72 @@ a1_moedl_lb_penalty:
 a2_moedl_lb_biasing:
 	$(MAKE) _ablate-load-balance runlabel=$@-$(postfix) coeff=0.00 gamma=0.01 lr=8e-4
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Scaling Number of Experts
+# ───────────────────────────────────────────────────────────────────────────────
+_ablate-num-experts:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides lb_coeff=0.0,lb_gamma=0.01,num_experts=$(E),num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+b1_moedl_e2_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=2 lr=8e-4
+b2_moedl_e4_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=4 lr=8e-4
+b3_moedl_e8_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=8 lr=8e-4
+b4_moedl_e16_k1:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=16 lr=8e-4
+b20_moedl_e4_k1_4ep:
+	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=4 lr=8e-4 ep=4
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Ablating MoE Resolution (a.k.a. expert granularity)
+# ───────────────────────────────────────────────────────────────────────────────
 _ablate-moe-resolution:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
 		--config_overrides lb_gamma=0.01,num_experts=$(E),num_active_experts=$(K),intermediate_size=$(Dff),num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
-b1_moedl_e8_k1:
+c1_moedl_e8_k1:
 	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=8  K=1 Dff=2048 lr=8e-4
-b2_moedl_e16_k2:
+c2_moedl_e16_k2:
 	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=16 K=2 Dff=1024 lr=8e-4
-b3_moedl_e32_k4:
+c3_moedl_e32_k4:
 	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=32 K=4 Dff=512  lr=8e-4
-b4_moedl_e64_k8:
+c4_moedl_e64_k8:
 	$(MAKE) _ablate-moe-resolution runlabel=$@-$(postfix) E=64 K=8 Dff=256  lr=8e-4
 
-
+# ───────────────────────────────────────────────────────────────────────────────
+# Are Shared Experts Mandatory?
+# ───────────────────────────────────────────────────────────────────────────────
 _ablate-shared-experts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
 		--config_overrides lb_gamma=0.01,num_experts=$$((32-$(ES))),num_active_experts=$$((4-$(ES))),num_shared_experts=$(ES),intermediate_size=512,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
-c1_moedl_s0_k4_e32:
+d1_moedl_s0_k4_e32:
 	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=0 lr=8e-4
-c2_moedl_s1_k3_e31:
+d2_moedl_s1_k3_e31:
 	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=1 lr=8e-4
-c3_moedl_s2_k2_e30:
+d3_moedl_s2_k2_e30:
 	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=2 lr=8e-4
-c4_moedl_s3_k1_e29:
+d4_moedl_s3_k1_e29:
 	$(MAKE) _ablate-shared-experts runlabel=$@-$(postfix) ES=3 lr=8e-4
 
-
+# ───────────────────────────────────────────────────────────────────────────────
+# Capacity Factor/Expert Capacity:To drop or Not to Drop Tokens?
+# ───────────────────────────────────────────────────────────────────────────────
 _ablate-token-drop:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
 		--config_overrides capacity_factor=$(CF),lb_gamma=0.01,num_experts=8,num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
-d1_moedl_cf_1.0:
+e1_moedl_cf_1.0:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=1.0 lr=8e-4
-d2_moedl_cf_1.5:
+e2_moedl_cf_1.5:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=1.5 lr=8e-4
-d3_moedl_cf_2.0:
+e3_moedl_cf_2.0:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=2.0 lr=8e-4
-d4_moedl_cf_2.5:
+e4_moedl_cf_2.5:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=2.5 lr=8e-4
