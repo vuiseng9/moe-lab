@@ -87,9 +87,74 @@ We subclass the HF `Trainer` to add MoE-specific training bookkeeping and loggin
 
 ---
 ### Load Balancing Strategy 
-**Loss Penalty vs. Router Biasing (DeepSeek v3)**
+> TLDR: Router biasing is surprisingly effective, easier to implement, requires less tuning!
 
-TLDR: Router biasing is surprisingly effective, easier to implement, lesser tuning required!
+Load balancing is crucial for MoE models to ensure that experts or more importantly the underlying devices are utilized effectively. By *load balance*, it simply means router's ability to distribute the incoming tokens evenly across all experts. Proper load balance allows computational work to be shared evenly across experts/devices, enabling parallelism and improving both training and inference efficiency.
+
+#### Load Imbalance Penalty
+Google has pioneered the use of an *auxiliary loss* added to the training objective to penalize load imbalance among experts, encouraging models to learn more even routing in order to achieve a lower overall training loss.
+
+&emsp; $\mathcal{L} = \mathcal{L}_{\text{ce}} + \lambda \, \mathcal{L}_{\text{aux}}$ &emsp; 
+
+&emsp; $\mathcal{L}_{\text{aux}} = E \sum_{e=1}^{E} f_e \, p_e$ &emsp; ── eq.1 
+
+&emsp; where &emsp; 
+* $E$ is the number of experts
+* $f_e$ is the fraction of tokens routed to expert $e$
+* $p_e$ is the average router probability assigned to expert $e$ (router's softmax output, averaged over tokens and $k$ experts)
+
+This technique is conceptually simple and closely resembles regularization. In our implementation, $\lambda$ is controlled by the `lb_coeff`.
+
+#### Router Load Biasing (DeepSeek v3)
+Dubbed as *auxiliary loss-free load balancing*, DeepSeek V3 introduced an alternative approach that directly modifies the router logits (sigmoid output) with an additive *load-biasing term* before applying the Top-k assignment of experts. This biasing term is updated periodically based on the observed expert loads, effectively nudging the router to favor less-utilized experts.
+
+&emsp; $\mathbf{s} = \sigma(W x) + \mathbf{b}_{\text{lb}}$ &emsp; ($\sigma$ is sigmoid instead of softmax)
+
+&emsp; $\mathcal{K} = \operatorname{TopK}(\mathbf{s}, K)$ &emsp; (expert selection)
+
+&emsp; where &emsp;
+* $\mathbf{s} \in \mathbb{R}^{E}$ is the biased router score vector over all experts (per token).
+* $\mathbf{b}_{\text{lb}} \in \mathbb{R}^{E}$ is the load-bias vector, initialized to $\mathbf{0}$ and updated periodically as:
+
+&emsp; $\mathbf{b}_{\text{lb}} \leftarrow \mathbf{b}_{\text{lb}} + \gamma\,(\bar{\mathbf{f}} - \mathbf{f})$ &emsp; (every $N$ steps)
+
+&emsp; where &emsp;
+* $\mathbf{f} \in \mathbb{R}^{E}$ is the observed expert-load fraction averaged over $N$ steps.
+* $\bar{\mathbf{f}} = \tfrac{1}{E}\mathbf{1}$ is the uniform target load.
+* $\gamma$ is the bias update rate.
+
+It is important to note that $b_{lb}$ does not participate in forward propagation other than modifying the router scores, hence does not affect the gradient computation. Its value is calibrated solely through the periodic update based on observed loads. If you are familiar with control systems, this is equivalent to a simple proportional controller operating directly on the routing imbalance error signal.
+
+#### Ablation Results & Analysis
+Setup: We ablate on `Moedl` with 8 experts (E=8) and 1 active expert per token (K=1) on TinyStories for 2 epochs We compare **no load balancing** (baseline), **imbalance penalty**, and **router biasing**.
+
+| make [experiment id]         | Eval Loss |
+|---------------------------   |:---------:|
+| `a0_moedl_no_lb`             | 1.127     |
+| `a1_moedl_lb_penalty`        | 1.137     |
+| `a2_moedl_lb_biasing`        | 1.130     |
+
+At first glance, all three strategies converge to similar final eval loss, with the best result achieved without load balancing, followed closely by router biasing, and finally the imbalance penalty. While the final loss differences are small, the load-balancing dynamics differ. To illustrate this, we examine expert load over time. The following plots, logged in W&B, show expert load averaged across experts and layers.
+
+**Without load balancing**, expert imbalance is immediately apparent. A small subset of experts dominates the routing, as reflected by the disproportionate heights in the stacked plot and the uneven distributions in the % overlay view.
+
+<img src="assets/a0_no_lb_expert_load.png" width="600" style="height:auto;">
+
+**Imbalance penalty** improves load distribution gradually over training. Between steps 2k and 10k, the % plot exhibit noticeably higher variance, indicating noisy and unstable routing before the auxiliary loss sufficiently regularizes expert utilization.
+
+<img src="assets/a1_lb_penalty_expert_load.png" width="600" style="height:auto;">
+
+**Router biasing** yields the most stable behavior. Expert load converges rapidly toward a uniform distribution, with significantly tighter variance bounds in the % plot throughout training.
+
+<img src="assets/a2_lb_biasing_expert_load.png" width="600" style="height:auto;">
+
+At this point, router biasing edges out the imbalance penalty (lower eval loss, tighter distribution variance), but not convincingly so. The *take-my-money* moment comes next: per-expert, per-layer load deviations visualized as animated heatmaps over training.
+
+
+
+
+
+Why router biasing works better? 
 
 
 
