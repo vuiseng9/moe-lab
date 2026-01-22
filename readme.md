@@ -1,4 +1,9 @@
+<img src="assets/compare_lb_strategy_heatmaps.gif" width="600" style="height:auto;">
+
 ## MoE Ablations
+**Jump to:**
+* Load Balancing Strategy: Loss Penalty vs. Router Biasing
+* Future Plans
 
 **Motivation:** 
 
@@ -12,9 +17,7 @@ I intended to carry out these ablations using modest resources with HuggingFace 
 
 As a result, I decided to implement a new model type in local HF Transformers, `Moedl` (no pun intended!😝). This allows individual design choices to be turned on or off in a controlled manner while keeping the rest of the architecture fixed. While some features are still work in progress and certain ablations require larger resources, I believe there is now sufficient material to document the observations and findings.
 
-**Jump to:**
-* Load Balancing Strategy: Loss Penalty vs. Router Biasing
-* Future Plans
+
 
 **Hit the ground running with:**
 * **Install**: clone and `make install-moelab` or `make install-dev-moelab`
