@@ -150,7 +150,7 @@ At first glance, all three strategies converge to similar final eval loss, with 
 
 At this point, router biasing edges out the imbalance penalty (lower eval loss, tighter distribution variance), but not convincingly so. The *take-my-money* moment comes next: per-expert, per-layer load deviations visualized as animated heatmaps over training.
 
-
+![](assets/compare_lb_strategy_heatmaps.gif)
 
 
 
