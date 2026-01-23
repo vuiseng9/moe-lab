@@ -1,7 +1,7 @@
 ## MoE Ablations
 
 **Jump to:**
-* Load Balancing Strategy: Loss Penalty vs. Router Biasing
+* Addressing the elephant first: which Load Balancing Strategy? Perhaps the most interesting plot in this repo.
 * Future Plans
 
 ---
@@ -35,7 +35,7 @@ As a result, I decided to implement a new model type in local HF Transformers, `
         b3_moedl_e8_k1       d3_moedl_s2_k2_e30   install-moelab
         b4_moedl_e16_k1      d4_moedl_s3_k1_e29   run-tests
         ``` 
-    * **More customization**: use `moelab_main.py` like we use standard HF script. Do `python moelab_main.py --help` to see options.
+    * **More customization**: use [`moelab_main.py`][main] like we use standard HF script. Do `python moelab_main.py --help` to see options.
     * **Find LR**: Appending `--sweep_lr <list of comma-limited lr>` to `moelab_main.py` will turn it into learning rate sweep over input values for small number of steps which can be configured with `--sweep_lr_steps <num_steps>`. For experiments in the [`Makefile`][mkfile], just append sweep_lr=1 to the make command. e.g. `make c1_moedl_e8_k1 sweep_lr=1`. A report will be generated in the output folder and metrics of respective sweare logged to wandb.
 
 * All runs are shared on [W&B project][wbproj]. 
@@ -58,7 +58,7 @@ Our objectives are:
 #### [TinyStories][ts-paper]
 All experiments use TinyStories, a synthetic [dataset][ts-ds] of short stories restricted to vocabulary typically understood by children of ages 3-4, generated using GPT-3.5 and GPT-4.
 
-We choose TinyStories because the original paper demonstrates that models with as few as ~10M parameters can already learn to generate fluent and logically consistent stories. This allows us to bound both model size and training compute, keeping experiments feasible on a single GPU while still uncovering meaningful ablation trends. MoE models in this repo are typically a few hundred million parameters, mostly around 400M total parameters.
+We choose TinyStories because the original paper demonstrates that models with as few as ~10M parameters can already learn to generate fluent and logically consistent stories. This allows us to bound both model size and training compute, keeping experiments feasible on a single GPU while still uncovering meaningful ablation trends. MoE models in this repo are typically a few hundred million parameters, mostly around 400M total parameters with 12.5% sparsity, ~135M active parameters per token.
 
 TinyStories is also easy to evaluate qualitatively: story coherence and logical consistency are readily observable, making it practical for comparing MoE ablations at small scale. In contrast, prior experience using GPT-2 or OPT models of similar scale trained on large, generic corpora often results in incoherent or unstructured generation, making qualitative comparison across models unreliable or infeasible.
 
@@ -267,6 +267,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [MoedlCfg]: ./src/moelab/moedl/configuration_moedl.py
 [MoedlImpl]: ./src/moelab/moedl/modeling_moedl.py
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
+[main]: ./moelab_main.py
 
 [megablocks]: http://arxiv.org/abs/2211.15841
 [ds-moe]: http://arxiv.org/abs/2401.06066
