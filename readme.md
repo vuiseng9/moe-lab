@@ -190,9 +190,9 @@ This is a mixed result. All MoE variants outperform the dense baseline, confirmi
 ---
 ### MoE Resolution (Expert Granuarity)
 
-[DeepSeekMoE][ds-moe] is among the first to propose *fine-grained expert segmentation*, commonly referred to as *expert granularity*. The core idea is to **use smaller experts but more of them**. We prefer the term **resolution**, as it more directly reflects the E:K config, the number of experts relative to the number of activated experts per token, and implicitly conveys the sparsity ratio.
+[DeepSeekMoE][ds-moe] is among the first to propose *fine-grained expert segmentation*, also referred to as *expert granularity*. The core idea is to **use smaller experts but more of them**. We prefer the term **resolution**, as it directly reflects the actual E:K config, and implicitly conveys the sparsity ratio.
 
-The effectiveness of higher resolution can be reasoned about combinatorially. For a fixed sparsity ratio and approximately constant total model parameters, increasing resolution dramatically increases the number of possible expert combinations ($_EC_k$), see table below. This means increasing the number of routing possibilities, substantially elevating model expressivity.
+The effectiveness of higher resolution can be reasoned about combinatorially. For a fixed sparsity ratio and approximately constant total model parameters, increasing resolution dramatically increases the number of possible expert combinations ($_EC_k$), see table below. Increasing the number of routing possibilities elevates model expressivity.
 
 | make [exp. id]        | Resolution (E:K) | Combinations ($_EC_k$) | Eval Loss |
 |-----------------------|:----------------:| ----------------------:|:---------:|
@@ -201,15 +201,63 @@ The effectiveness of higher resolution can be reasoned about combinatorially. Fo
 | `c3_moedl_e32_k4`     | 32:4             | 35,960                 | **1.0581**|
 | `c4_moedl_e64_k8`     | 64:8             | 4,426,165,368          | 1.0584    |
 
-We ablate MoE models at a fixed sparsity ratio of 12.5% while increasing resolution: E:K = 8:1, 16:2, 32:4, and 64:8. Total model parameters are kept approximately constant at 400M by adjusting the expert hidden size. The benefit of higher resolution is clearly observed empirically: as resolution increases, model performance improves. This trend is consistent with prior results reported in [DeepSeekMoE Table 1][ds-moe] and [OLMoE ablations (Fig. 5)][olmoe]. However, our gains eventually saturate, we attribute the diminishing returns to under-training of smaller experts or data starvation.
+We ablate MoE models at a fixed sparsity ratio of 12.5% while increasing resolution: E:K = 8:1, 16:2, 32:4, and 64:8. Total model parameters are kept approximately constant at 400M by adjusting the expert hidden size. The benefit of higher resolution is clearly observed empirically: as resolution increases, model performance improves. However, the gains eventually saturate, we attribute the diminishing returns to under-training of smaller experts or data starvation. Our observed trends are consistent with prior results reported in [DeepSeekMoE's Table 1][ds-moe] and [OLMoE ablations (Fig. 5)][olmoe].
+
+### Are Shared Experts Mandatory?
+
+In addition to finer-grained experts, [DeepSeekMoE][ds-moe] also advocates the use of *shared experts*, where a subset of experts is activated for every token. The rationale is that certain forms of common knowledge may be universal, and sharing experts could reduce parameter redundancy and improve learning efficiency.
+
+While this intuition is appealing, [OLMoE (4.1.3)][olmoe] highlights a potential confound to the combinatorial argument. Shared experts are essentially fixed routing paths and contribute no additional combinations. At iso-active-expert settings, introducing shared experts effectively reduces the number of unique experts available for combination, which may be counter-productive for model expressivity (see Table).
+
+Empirical results in the literature are mixed. The proposer [DeepSeekMoE (Fig.3,6)][ds-moe] reports benefits from shared experts whereas [OLMoE (4.1.3)][olmoe] observes limited or negative impact. [NVIDIA's ablations][] show similar convergence behavior with and without shared experts, though in the specific context of upcycling a Nemotron-4 dense model into an MoE. Notably, most prior studies explore shared experts in a binary on/off setting.
+
+Given the lightweight nature of our setup, we are able to explore this design axis more thoroughly by varying the number of shared experts while holding total active experts constant. Our baseline is E=32, K=4, 400M parameters with XX active. We vary the number of shared experts from 0 to 3, adjusting the unique experts accordingly to maintain a total of 4 active experts.
+
+| make [exp. id]             | Shared (ES) | E  | K | Active Experts | Combinations ($_EC_k$) | Eval Loss |
+|----------------------------|:-----------:|---:|--:|:--------------:|-----------------------:|:---------:|
+| `d1_moedl_s0_k4_e32-0119`  | 0           | 32 | 4 | 4              | 35,960                 | 1.0581    |
+| `d2_moedl_s1_k3_e31-0119`  | 1           | 31 | 3 | 4              | 4,495                  | **1.0573**|
+| `d3_moedl_s2_k2_e30-0119`  | 2           | 30 | 2 | 4              | 435                    | 1.0600    |
+| `d4_moedl_s3_k1_e29-0119`  | 3           | 29 | 1 | 4              | 29                     | 1.1014    |
+
+**Results:** The overall trend suggests that more shared experts lead to worse performance aligning to the combinatorial argument. Yet the best result is achieved with 1 shared expert (ES=1) by just tiny margin (0.0008) over no shared experts (ES=0). This small gain may be attributed to dataset characteristics such as limited scale or diversity in TinyStories, leading to under-training of non-shared experts.
+
+**Personal take:** In my view, the benefit of shared experts, if any, appears marginal. Rather than allocating capacity to shared experts, I would prefer to expand the main trunk by widening layers or adding depth to **preserve** symmetry within MoE blocks. Conceptually, these approaches serve a similar purpose, applying a common transformation to every token.
+
+Moreover, shared experts can be viewed as inherently load-imbalanced, as they are activated for every token by design. The practical ramifications of this behavior remain unclear (at least to me at the moment). As such, we do not recommend shared experts as a default design choice.
+
+### Limiting Expert Capacity: To Drop Tokens or Not? Don’t.
+
+Since the early days of MoE research, Google has employed fixed expert capacity, largely because TPUs and the XLA compiler require tensor shapes to be known statically; dynamically varying token counts at runtime are challenging to support. By expert capacity, each expert is allowed to process only a limited number of tokens during routing. Tokens exceeding this capacity are dropped, i.e., they are not processed by any expert.
+
+Concretely, the **capacity factor (CF)** controls this limit:
+
+`expert_capacity = (Tokens_per_batch * K / E)  ×  CF`
+
+In plain terms, CF = 1.0 restricts each expert to the average expected token load under perfectly balanced routing. Increasing CF allows experts to handle more tokens beyond this average. For example, CF = 2.0 permits each expert to process up to 2x the average load, reducing the likelihood of token dropping in imbalance routing.
+
+Following the vein of [MegaBlocks][megablocks], we ablate the effect of token dropping on Moedl with resolution E:K = 8:1 by sweeping the capacity factor (CF) from 1.0 to 2.5 in increments of 0.5. Note that our setup differs in load balancing: we use router biasing, whereas MegaBlocks uses an auxiliary load-balancing objective. Run `make e1 .. e4` for the CF sweeps, and refer `a2` / `b3` for the dropless setting (CF disabled).
+
+<img src="assets/cf_ablations.png" width="400" style="height:auto;">
+
+<img src="assets/cf_drop_token_count_over_time.png" width="300" style="height:auto;">
+
+**Dropping tokens is detrimental.** The dropless setting (CF disabled) outperforms all CF configurations. Among the CF runs, the highest CF (2.5) which minimizes token dropping performs best, consistent with the idea that fewer dropped tokens leads to better learning.
+
+To make this concrete, we enclose the total number of dropped tokens over training. With CF=1.0, the model continues to drop tokens throughout training, ending at ~6K+ dropped tokens aggregated across layers (roughly ~1% of all tokens). In contrast, CF=1.5/2.0/2.5 quickly converge to near-zero dropped tokens. This also suggests router biasing already routes tokens effectively, experts do not hit extra expert capacity (higher CF).
+
+A little nuance, CF=1.5 and CF=2.0 converge slightly worse than CF=1.0. We suspect this is variance, or that early-stage token dropping can have lasting impact on model learning. Regardless, the trend is clear: **token dropping is not beneficial.** Also crucially, router biasing effectively mitigates expert overload, making capacity-based token dropping unnecessary. *So, don't drop tokens!*
+
+---
+
+### Conclusion
+
+Our ablations suggest: Use router biasing for load balancing. Prefer MoE with higher resolution - small experts, more of them, but watch for diminishing returns. Skip shared experts and token dropping.
 
 
+---
+### Future Plans
 
-
-
-Acknowledgements
-
-Citations
 
 [mkfile]: ./Makefile
 [wbproj]: https://wandb.ai/vchua/moe-lab
@@ -217,6 +265,7 @@ Citations
 [MoedlImpl]: ./src/moelab/moedl/modeling_moedl.py
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
 
+[megablocks]: http://arxiv.org/abs/2211.15841
 [ds-moe]: http://arxiv.org/abs/2401.06066
 [ds-r1]: https://arxiv.org/abs/2501.12948
 [ds-v3]: https://arxiv.org/abs/2412.19437
@@ -230,6 +279,6 @@ Citations
 [og-moe-2017]: https://arxiv.org/abs/1701.06538 
 [ts-paper]: http://arxiv.org/abs/2305.07759
 [ts-ds]: https://huggingface.co/roneneldan/TinyStories-33M
-
+[nv-upcycle]: http://arxiv.org/abs/2410.07524
 [dc-illa]:http://arxiv.org/abs/2305.16264
 
