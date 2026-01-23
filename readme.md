@@ -9,15 +9,15 @@
 
 2025 is the year of reasoning and agents. It can also be argued as the year Mixture-of-Experts (MoE) models truly hit the mainstream. Virtually every flagship model from frontier labs is an MoE, although Google has been pioneering and popularizing the idea since [2017][og-moe-2017].
 
-The beginning of 2025 was marked by the release of [DeepSeek R1][ds-r1], which demonstrated reasoning learned through pure RL. Its backbone is [DeepSeek V3, a 671B MoE][ds-v3]. [Qwen3 MoE][qwen3] arrived mid-year, followed by [OpenAI's GPT-OSS][gpt-oss-blog] in late August. The year closed with models such as [Kimi-K2][kimi-k2-report] and [Mistral Large 3][ml3-blog], which largely adopt DeepSeek V3–style architectures with an even larger number of experts.
+The beginning of 2025 was marked by the release of [DeepSeek R1][ds-r1], which demonstrated reasoning learned through pure RL with verifiable feedbacks. Its backbone is [DeepSeek V3, a 671B MoE][ds-v3]. [Qwen3 MoE][qwen3] arrived mid-year, followed by [OpenAI's GPT-OSS][gpt-oss-blog] in August. The year closed with models such as [Kimi-K2][kimi-k2-report] and [Mistral Large 3][ml3-blog], which largely adopt DeepSeek V3–style architectures with larger number of experts.
 
-Personally, I am particularly interested in understanding which components of MoE models contribute most to their efficacy beyond *just* scale and the conditional compute. My initial questions centered on how effective the load-balance biasing strategy used in DeepSeek V3 is compared to loss-based penalties. I did not encounter comparative study on this technique. *(I may have overlooked prior ablations and would appreciate pointers)*. I also questioned whether shared experts are truly mandatory, given that they introduce an additional engineering effort. While some prior work suggests they are not strictly required, I find the existing evidence not yet compelling *(though personally favor avoiding unremarkable additions)*. 
+Personally, I am particularly interested in understanding which components of MoE models contribute most to their efficacy beyond *just* scale and the conditional compute. My initial questions centered on how effective the load-balance biasing strategy used in DeepSeek V3 is compared to loss-based penalties. I did not encounter comparative study on this technique. *(I may have overlooked prior ablations and would appreciate pointers)*. I also questioned whether shared experts are truly mandatory, given that they introduce asymmetry and potentially additional engineering effort. While some prior work suggests they are not strictly required, I find the existing evidence not yet compelling *(though personally favor avoiding unremarkable additions)*. 
 
-I intended to carry out these ablations using modest resources with HuggingFace (HF) Transformers. However, I could not find an implementation that exposes load balance biasing control. More importantly, there was no single MoE model type that allowed meaningful ablations while keeping most components consistent and only contrasting a single axis of design choices. For example, when comparing loss penalties versus biasing strategies for balancing expert load, I would like the attention layers to remain identical. DeepSeek V3 uses Multi-Latent Attention (MLA), which differs from the standard multi-head attention (MHA/MQA/GQA) used in models such as OLMoE or Qwen3, using existing implementations make direct comparisons unhygienic.
+I intended to carry out these ablations using modest resources with HuggingFace (HF) Transformers. However, I could not find an implementation that exposes load balance biasing control. More importantly, there was no single MoE model type that allowed only contrasting a single axis of design choices while keeping most components consistent. For example, when comparing loss penalties versus biasing strategies for balancing expert load, I would like the attention layers to remain identical. DeepSeek V3 uses Multi-Latent Attention (MLA), which differs from the standard multi-head attention (MHA/MQA/GQA) used in models such as OLMoE or Qwen3, using/modifying existing implementations make direct comparisons unhygienic.
 
 As a result, I decided to implement a new model type in local HF Transformers, `Moedl` (no pun intended!😝). This allows individual design choices to be turned on or off in a controlled manner while keeping the rest of the architecture fixed. While some features are still work in progress and certain ablations require larger resources, I believe there is now sufficient material to document the observations and findings.
 
-**Hit the ground running with:**
+#### Hit the ground running
 
 * **Install**: clone and `make install-moelab` or `make install-dev-moelab`
 * **Test**: `make run-tests`
@@ -194,12 +194,12 @@ This is a mixed result. All MoE variants outperform the dense baseline, confirmi
 
 The effectiveness of higher resolution can be reasoned about combinatorially. For a fixed sparsity ratio and approximately constant total model parameters, increasing resolution dramatically increases the number of possible expert combinations ($_EC_k$), see table below. Increasing the number of routing possibilities elevates model expressivity.
 
-| make [exp. id]        | Resolution (E:K) | Combinations ($_EC_k$) | Eval Loss |
-|-----------------------|:----------------:| ----------------------:|:---------:|
-| `c1_moedl_e8_k1`      | 8:1              | 8                      | 1.1296    |
-| `c2_moedl_e16_k2`     | 16:2             | 120                    | 1.0658    |
-| `c3_moedl_e32_k4`     | 32:4             | 35,960                 | **1.0581**|
-| `c4_moedl_e64_k8`     | 64:8             | 4,426,165,368          | 1.0584    |
+| make [exp. id]        |Expert Dff | Resolution (E:K) | Combinations ($_EC_k$) | Eval Loss |
+|-----------------------|:---------:|:----------------:| ----------------------:|:---------:|
+| `c1_moedl_e8_k1`      | 2048      | 8:1              | 8                      | 1.1296    |
+| `c2_moedl_e16_k2`     | 1024      | 16:2             | 120                    | 1.0658    |
+| `c3_moedl_e32_k4`     | 512       | 32:4             | 35,960                 | **1.0581**|
+| `c4_moedl_e64_k8`     | 256       | 64:8             | 4,426,165,368          | 1.0584    |
 
 We ablate MoE models at a fixed sparsity ratio of 12.5% while increasing resolution: E:K = 8:1, 16:2, 32:4, and 64:8. Total model parameters are kept approximately constant at 400M by adjusting the expert hidden size. The benefit of higher resolution is clearly observed empirically: as resolution increases, model performance improves. However, the gains eventually saturate, we attribute the diminishing returns to under-training of smaller experts or data starvation. Our observed trends are consistent with prior results reported in [DeepSeekMoE's Table 1][ds-moe] and [OLMoE ablations (Fig. 5)][olmoe].
 
@@ -240,7 +240,7 @@ Following the vein of [MegaBlocks][megablocks], we ablate the effect of token dr
 
 <img src="assets/cf_ablations.png" width="400" style="height:auto;">
 
-<img src="assets/cf_drop_token_count_over_time.png" width="300" style="height:auto;">
+<img src="assets/cf_drop_token_count_over_time.png" width="400" style="height:auto;">
 
 **Dropping tokens is detrimental.** The dropless setting (CF disabled) outperforms all CF configurations. Among the CF runs, the highest CF (2.5) which minimizes token dropping performs best, consistent with the idea that fewer dropped tokens leads to better learning.
 
@@ -259,8 +259,11 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 ### Future Plans
 
 
+
+
+
 [mkfile]: ./Makefile
-[wbproj]: https://wandb.ai/vchua/moe-lab
+[wbproj]: https://wandb.ai/vchua/moe-lab-2026-0119
 [MoedlCfg]: ./src/moelab/moedl/configuration_moedl.py
 [MoedlImpl]: ./src/moelab/moedl/modeling_moedl.py
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
