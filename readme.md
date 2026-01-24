@@ -2,14 +2,14 @@
 
 ## MoE Ablations
 
-**Jump to:**
-* Addressing the elephant first: Which Load Balancing Strategy? This animated heatmaps settle the debate fast.
+**Jump to**
+* Addressing the elephant first: Which [Load Balancing Strategy](#load-balancing-strategy)? This [animated heatmaps][large-hp] settles the debate.
 * [Hit the ground running](#hit-the-ground-running): Hands-on guide.
-* Smaller Experts, More of Them: [Resolution and Granularity]().
-* Shared Experts? Probably not compelling enough to be worth the effort.
-* Token Dropping is pretty much irrelavant with proper load balancing. So Don't!
-* Scaling #Experts: Well ablated in literature while we run into anomaly which requires further investigation.
-* Future Plans
+* Smaller Experts, More of Them: [Resolution and Granularity](#moe-resolution--expert-granularity).
+* [Shared Experts?](#are-shared-experts-mandatory) Probably not compelling enough to be worth the effort.
+* Token Dropping is pretty much irrelevant with proper load balancing. So [Don't!](#limiting-expert-capacity-to-drop-tokens-or-not-dont)
+* [Scaling #Experts](#scaling-number-of-experts-e): Well ablated in literature while we run into anomaly which requires further investigation.
+* [Future Plans](#future-plans)
 
 ---
 **Motivation:** 
@@ -237,6 +237,7 @@ Given the lightweight nature of our setup, we are able to explore this design ax
 
 Moreover, shared experts can be viewed as inherently load-imbalanced, as they are activated for every token by design. The practical ramifications of this behavior remain unclear (at least to me at the moment). As such, we do not recommend shared experts as a default design choice.
 
+---
 ### Limiting Expert Capacity: To Drop Tokens or Not? Don’t.
 
 Since the early days of MoE research, Google has employed fixed expert capacity, largely because TPUs and the XLA compiler require tensor shapes to be known statically; dynamically varying token counts at runtime are challenging to support. By expert capacity, each expert is allowed to process only a limited number of tokens during routing. Tokens exceeding this capacity are dropped, i.e., they are not processed by any expert.
@@ -264,8 +265,7 @@ A little nuance though, CF=1.5 and CF=2.0 converge slightly worse than CF=1.0. W
 
 Our ablations suggest: Use router biasing for load balancing. Prefer MoE with higher resolution - small experts, more of them, but watch for diminishing returns. Skip shared experts and token dropping.
 
----
-### Future Plans
+#### Future Plans
 
 1. Grouped GEMM kernel integration for more efficient training and larger-scale ablations.
 2. Revisit scaling number of experts ablations to understand the anomaly we observed.
@@ -278,6 +278,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [MoedlImpl]: ./src/moelab/moedl/modeling_moedl.py
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
 [main]: ./moelab_main.py
+[large-hp]: ./assets/compare_lb_strategy_heatmaps.gif
 
 [megablocks]: http://arxiv.org/abs/2211.15841
 [ds-moe]: http://arxiv.org/abs/2401.06066
