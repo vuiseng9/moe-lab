@@ -1,3 +1,5 @@
+
+
 ## MoE Ablations
 
 **Jump to:**
@@ -95,11 +97,11 @@ We subclass the HF `Trainer` to add MoE-specific training bookkeeping and loggin
 Load balancing is crucial for MoE models to ensure that experts or more importantly the underlying devices are utilized effectively. By *load balance*, it simply means router's ability to distribute the incoming tokens evenly across all experts. Proper load balance allows computational work to be shared evenly across experts/devices, enabling parallelism and improving both training and inference efficiency.
 
 #### Load Imbalance Penalty
-Google has pioneered the use of an *auxiliary loss* added to the training objective to penalize load imbalance among experts, encouraging models to learn more even routing in order to achieve a lower overall training loss.
+Google has pioneered the use of an ___auxiliary loss___ ($L_{aux}$) added to the training objective to penalize load imbalance among experts, encouraging models to learn more even routing while optimizing towards lower training loss.
 
-&emsp; $\mathcal{L} = \mathcal{L}_{\text{ce}} + \lambda \, \mathcal{L}_{\text{aux}}$ &emsp; 
+&emsp; $L = L_{ce} + \lambda L_{aux}$ &emsp; 
 
-&emsp; $\mathcal{L}_{\text{aux}} = E \sum_{e=1}^{E} f_e \, p_e$ &emsp; ── Eq.1 
+&emsp; $L_{aux} = E \sum_{e=1}^{E} f_e  p_e$ &emsp; ── Eq.1 
 
 &emsp; where &emsp; 
 * $E$ is the number of experts
@@ -109,22 +111,23 @@ Google has pioneered the use of an *auxiliary loss* added to the training object
 This technique is conceptually simple and closely resembles regularization. In our implementation, $\lambda$ is controlled by the `lb_coeff`.
 
 #### Router Load Biasing ([DeepSeek v3][ds-v3])
-Dubbed as *auxiliary loss-free load balancing*, DeepSeek V3 introduced an alternative approach that directly modifies the router logits (sigmoid output) with an additive *load-biasing term* before applying the Top-k assignment of experts. This biasing term is updated periodically based on the observed expert loads, effectively nudging the router to favor less-utilized experts.
+Dubbed as *auxiliary loss-free load balancing*, DeepSeek V3 introduced an alternative approach that directly modifies the router logits (sigmoid output) with an additive ___load-biasing term___ before applying the Top-k assignment of experts. This biasing term is updated periodically based on the observed expert loads, effectively nudging the router to favor less-utilized experts.
 
-&emsp; $\mathbf{s} = \sigma(W x) + \mathbf{b}_{\text{lb}}$ &emsp; ── Eq.2  
-&emsp; *$\sigma$ is sigmoid instead of softmax.* &emsp;
+&emsp; $s = \sigma(W x) + b_{lb}$ &emsp; ── Eq.2  
+&emsp; $\sigma$ *is sigmoid instead of softmax.* &emsp;
 
-&emsp; $\mathcal{K} = TopK(\mathbf{s}, K)$ &emsp;
-
-&emsp; where &emsp;
-* $\mathbf{s} \in \mathbb{R}^{E}$ is the biased router score vector over all experts (per token).
-* $\mathbf{b}_{\text{lb}} \in \mathbb{R}^{E}$ is the load-balancing bias vector, initialized to $\mathbf{0}$ and updated periodically as:
-
-&emsp; $\mathbf{b}_{\text{lb}} \leftarrow \mathbf{b}_{\text{lb}} + \gamma\,(\bar{\mathbf{f}} - \mathbf{f})$ &emsp; (every $N$ steps)
+&emsp; $s_K, i_K = TopK(s, K)$ &emsp;
 
 &emsp; where &emsp;
-* $\mathbf{f} \in \mathbb{R}^{E}$ is the observed expert-load fraction averaged over $N$ steps.
-* $\bar{\mathbf{f}} = \tfrac{1}{E}\mathbf{1}$ is the uniform target load.
+* $s \in \mathbb{R}^{E}$ is the biased router score vector over all experts (per token).
+* $i_K$ is the indices of selected experts and $s_K$ is thier respective score in $s$.
+* $b_{lb} \in \mathbb{R}^{E}$ is the load-balancing bias vector, initialized to $\mathbf{0}$ and updated periodically as:
+
+&emsp; $b_{lb} \leftarrow b_{lb} + \gamma(\bar{f} - f)$ &emsp; (every $N$ steps)   ── Eq.3
+
+&emsp; where &emsp;
+* $\mathbf{f} \in \mathbb{R}^{E}$ is the observed expert-load fraction averaged over $N$ steps. Simplest N=1 would be after every optimizer stepping.
+* $\bar{f} = \tfrac{1}{E}\mathbf{1}$ is the uniform target load.
 * $\gamma$ is the bias update rate.
 
 It is important to note that $b_{lb}$ does not participate in forward propagation other than modifying the router scores, hence does not affect the gradient computation. Its value is calibrated solely through the periodic update based on observed loads. If you are familiar with control systems, this is equivalent to a simple proportional controller operating directly on the routing imbalance error signal.
