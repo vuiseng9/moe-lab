@@ -94,7 +94,9 @@ We subclass the HF `Trainer` to add MoE-specific training bookkeeping and loggin
 ### Load Balancing Strategy 
 > TLDR: Router biasing is surprisingly effective, easier to implement, requires less tuning!
 
-Load balancing is crucial for MoE models to ensure that experts or more importantly the underlying devices are utilized effectively. By *load balance*, it simply means router's ability to distribute the incoming tokens evenly across all experts. Proper load balance allows computational work to be shared evenly across experts/devices, enabling parallelism and improving both training and inference efficiency.
+Load balancing is a fundamental requirement for MoE models as it directly determines whether the underlying devices are utilized effectively. By *load balance*, it simply means router's ability to distribute the incoming tokens evenly across all experts. Proper load balance allows computational work to be shared evenly across experts/devices, enabling parallelism and improving both training and inference efficiency.
+
+In practice, however, load balancing is not built-in. In the standard MoE formulation, the training objective provides no explicit incentive for routing tokens evenly. The router is optimized to minimize training loss, which can naturally lead to imbalanced routing, where a small subset of experts becomes overloaded while others remain underutilized (as we will see in our ablations). So how should load balancing be enforced in MoE models?
 
 #### Load Imbalance Penalty
 Google has pioneered the use of an ___auxiliary loss___ ($L_{aux}$) added to the training objective to penalize load imbalance among experts, encouraging models to learn more even routing while optimizing towards lower training loss.
