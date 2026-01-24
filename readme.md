@@ -66,7 +66,7 @@ We use the LLaMA-2 tokenizer for its smaller 32K vocabs. After tokenization, the
 
 #### [`Moedl` Configurables][MoedlCfg] & [Implementation][MoedlImpl]
 
-This repo primarily focuses on the MoE layers. We need a smaller vocab given the property of TinyStories. Hence, we inherit from the `Llama` (LLaMA-2) architecture as the starting point, 32K vocab. Its attention stack also reflects the current standard: configurable GQA (MHA), RoPE, RMSNorm, and GLU-style MLPs. As a result, the standard LLaMA configurables are directly applicable to `Moedl`, including `hidden_size`, `intermediate_size`, `num_attention_heads`, `num_hidden_layers`, and related parameters.
+This repo primarily focuses on the MoE layers. Since we set sight on 32K llama2 vocab, we might as well inherit the `Llama` (LLaMA-2) architecture as the starting point. Its attention stack also reflects the current standard: configurable GQA (MHA), RoPE, RMSNorm, and GLU-style MLPs. As a result, the standard LLaMA configurables are directly applicable to `Moedl`, including `hidden_size`, `intermediate_size`, `num_attention_heads`, `num_hidden_layers`, and related parameters.
 
 `Moedl` can be configured as either a dense or an MoE model. As a sanity check, we train an equivalent LLaMA-2 dense model (`make 00_llama2_ref`) and a `Moedl` dense model (`make 01_moedl_dense`) on TinyStories. Equivalent training trajectories ensure architectural parity.
 
@@ -74,13 +74,13 @@ For MoE configurations, the following parameters can be varied:
 
 * `num_experts`: number of experts per MoE layer, denoted as **E** throughout. If set to 0, a dense layer is used.
 * `num_active_experts`: number of experts activated per token, denoted as **K** throughout.
-* `num_shared_experts`: number of shared experts across all layers, denoted as **ES** throughout.
-* `lb_coeff`: load-imbalance penalty coefficient. If set to 0, no loss-based penalty is applied.
+* `num_shared_experts`: number of shared experts, denoted as **ES** throughout.
+* `lb_coeff`: load-imbalance penalty coefficient. If set to 0, no loss-based penalty is added to the training objective.
 * `lb_gamma`: router biasing update rate. If set to 0, bias-based control is disabled.
-* No load balancing is applied when both `lb_coeff` and `lb_gamma` are set to 0.
+* No load balancing is applied when both `lb_coeff` and `lb_gamma` are set to 0. And both are mutually exclusive currently.
 * `capacity_factor`: expert capacity factor controlling token dropping. Setting this to 0 disables token dropping (i.e., dropless routing).
 
-Tests are developed to verify against Olmoe and DeepSeek V3 to ensure MoE implementation correctness.
+Tests are developed to verify against Olmoe and DeepSeek V3 to ensure functional correctness of these features.
 
 #### [`MoedlTrainer`][MoedlTrainer]
 
