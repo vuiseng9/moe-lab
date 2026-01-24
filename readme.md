@@ -1,6 +1,7 @@
 
 
-## MoE Ablations
+## moe-lab: Systematic MoE Design Ablations You Can Run at Home
+* Single-GPU experiments using Moedl, an MoE implementation built on Hugging Face Transformers *
 
 **Jump to**
 * Addressing the elephant first: Which [Load Balancing Strategy](#load-balancing-strategy)? This [animated heatmaps][large-hp] settles the debate.
@@ -176,6 +177,7 @@ While expert-specific coefficients could be introduced for the imbalance penalty
 
 Based on these results, we adopt router biasing as the default load-balancing strategy for the remaining ablations.
 
+---
 ### Scaling Number of Experts (E)
 
 With a stable and effective load-balancing strategy in place, we now turn to the question of scale. Specifically, we examine how increasing the number of experts impacts overall model performance. Following [Switch Transformer][switch] study, we fix K=1, one activated expert per token to keep computation roughly constant to dense counterpart (aside from minor router overhead) and scale the number of experts by doubling from 1 to 16.
