@@ -177,25 +177,23 @@ With a stable and effective load-balancing strategy in place, we now turn to the
 
 | make [exp. id]              | # Params | # Experts (E) | Eval Loss |
 |-----------------------------|---------:|:-------------:|----------:|
-| `01_moedl_dense`            |  77M     | 1             | 1.201     |
-| `b1_moedl_e2_k1`            | 175M     | 2             | **1.118** |
+| `01_moedl_dense`            | 137M     | 1             | 1.111     |
+| `b1_moedl_e2_k1`            | 175M     | 2             | 1.118     |
 | `b2_moedl_e4_k1`            | 251M     | 4             | 1.125     |
 | `b3_moedl_e8_k1`            | 402M     | 8             | 1.130     |
 | `b4_moedl_e16_k1`           | 704M     | 16            | 1.138     |
-| `b20_moedl_e4_k1_4ep`       | 251M     | 4             | **1.083** |
 
 <img src="assets/scaling_n_experts.png" width="500" style="height:auto;">
 
-This is a mixed result. All MoE variants outperform the dense baseline, confirming the effectiveness of MoE architectures in increasing model capacity while keeping per-token computation roughly constant. However, the 2-expert model achieves the best evaluation loss. This is somewhat unexpected, as we would anticipate continued gains when scaling to more experts (e.g., Fig. 1 in [Switch Transformer][switch]).
+Contrary to most ablations in the literature (e.g., Fig. 1 in [Switch Transformer][switch]), we observe monotonic performance degradation as expert count increases. We believe this is largely due to the sample inefficiency of sparse models. With a fixed budget of 1B tokens (TinyStories), increasing $E$ dilutes the training signal per expert ($\mathcal{D}_{expert} \approx \mathcal{D}_{total} / E$), leading to experts are significantly **undertrained** compared to the dense baseline. We plan to revisit this section in a few possible directions:
+1. **Iso-tokens-per-expert**: Train the MoE for E$\times$ more epochs so that each expert sees roughly the same amount of tokens as the dense model. If this fixes the loss, it validates undertraining and data starvation (dataset is probably too small). 
+2. **Scale E by dividing dense capacity**: An alternative scaling strategy that increases expert count while reducing per-expert capacity, potentially alleviating data starvation while keeping the overall ablation compute manageable.
+3. **Proportional Data Scaling**: Simply throw more data at it and move out of the TinyStories regime. This is conceptually straightforward, but deviates from our original goal of small-scale ablations.
 
-**Experts under-trained.** A likely explanation is expert undertraining at larger expert counts. In the dense setting, a single FFN sees approximately (B \times L \times N_{\text{steps}}) tokens during training. In an MoE model with (E) experts and (K=1), assuming balanced routing, these seen tokens are effectively partitioned across experts. As (E) increases, each expert sees fewer tokens, leading to under-trained experts. This is consistent with our results, which show deteriorating performance beyond (E=2).
-
-**E=4 with 2× longer training.** To validate this hypothesis, we conduct an additional experiment with (E=4) experts trained for 4 epochs instead of 2 (`b20_moedl_e4_k1_4ep`). This model sees approximately the same number of tokens per expert as E=2 trained with 2 epochs, and indeed achieves the better evaluation loss of 1.083.
-
-* to be continued ... *
+*We will revisit this once we improve the underlying kernel efficiency. At the moment, MoE layers are implemented by naively looping over experts (the standard HF approach). We plan to integrate a more efficient grouped GEMM implementation.*
 
 ---
-### MoE Resolution (Expert Granuarity)
+### MoE Resolution (Expert Granularity)
 
 [DeepSeekMoE][ds-moe] is among the first to propose *fine-grained expert segmentation*, also referred to as *expert granularity*. The core idea is to **use smaller experts but more of them**. We prefer the term **resolution**, as it directly reflects the actual E:K config, and implicitly conveys the sparsity ratio.
 
@@ -216,7 +214,7 @@ In addition to finer-grained experts, [DeepSeekMoE][ds-moe] also advocates the u
 
 While this intuition is appealing, [OLMoE (4.1.3)][olmoe] highlights a potential confound to the combinatorial argument. Shared experts are essentially fixed routing paths and contribute no additional combinations. At iso-active-expert settings, introducing shared experts effectively reduces the number of unique experts available for combination, which may be counter-productive for model expressivity (see Table).
 
-Empirical results in the literature are mixed. The proposer [DeepSeekMoE (Fig.3,6)][ds-moe] reports benefits from shared experts whereas [OLMoE (4.1.3)][olmoe] observes limited or negative impact. [NVIDIA's ablations][] show similar convergence behavior with and without shared experts, though in the specific context of upcycling a Nemotron-4 dense model into an MoE. Notably, most prior studies explore shared experts in a binary on/off setting.
+Empirical results in the literature are mixed. The proposer [DeepSeekMoE (Fig.3,6)][ds-moe] reports benefits from shared experts whereas [OLMoE (4.1.3)][olmoe] observes limited or negative impact. [NVIDIA's ablations][nv-upcycle] show similar convergence behavior with and without shared experts, though in the specific context of upcycling a Nemotron-4 dense model into an MoE. Notably, most prior studies explore shared experts in a binary on/off setting.
 
 Given the lightweight nature of our setup, we are able to explore this design axis more thoroughly by varying the number of shared experts while holding total active experts constant. Our baseline is E=32, K=4, 400M parameters with XX active. We vary the number of shared experts from 0 to 3, adjusting the unique experts accordingly to maintain a total of 4 active experts.
 
