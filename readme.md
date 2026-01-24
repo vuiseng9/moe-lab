@@ -1,7 +1,7 @@
 
 
-## moe-lab: Systematic MoE Design Ablations You Can Run at Home
-*Single-GPU experiments using [`Moedl`][MoedlImpl], an MoE implementation built on Hugging Face Transformers*
+## moe-lab: Rigorous MoE Design Ablations You Can Run at Home
+*No Cluster, Single-GPU experiments using [`Moedl`][MoedlImpl], an MoE implementation built on Hugging Face Transformers*
 
 **Jump to**
 * Addressing the elephant first: Which [Load Balancing Strategy](#load-balancing-strategy)? This [animated heatmaps][large-hp] settles the debate.
@@ -271,6 +271,15 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 
 1. Grouped GEMM kernel integration for more efficient training and larger-scale ablations.
 2. Revisit scaling number of experts ablations to understand the anomaly we observed.
+
+
+@software{chua_moe_lab_2026,
+  author       = {Vui Seng Chua},
+  title        = {moe-lab: Rigorous MoE Design Ablations You Can Run at Home},
+  year         = {2026},
+  url          = {https://github.com/vuiseng9/moe-lab},
+  note         = {Single-GPU, Hugging Face-based ablations of MoE design choices}
+}
 
 
 
