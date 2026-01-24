@@ -1,7 +1,7 @@
 
 
 ## moe-lab: Systematic MoE Design Ablations You Can Run at Home
-* Single-GPU experiments using Moedl, an MoE implementation built on Hugging Face Transformers *
+*Single-GPU experiments using `Moedl`, an MoE implementation built on Hugging Face Transformers*
 
 **Jump to**
 * Addressing the elephant first: Which [Load Balancing Strategy](#load-balancing-strategy)? This [animated heatmaps][large-hp] settles the debate.
