@@ -10,7 +10,7 @@
 * [Shared Experts?](#are-shared-experts-mandatory) Probably not compelling enough to be worth the effort.
 * Token Dropping is pretty much irrelevant with proper load balancing. So [Don't!](#limiting-expert-capacity-to-drop-tokens-or-not-dont)
 * [Scaling #Experts](#scaling-number-of-experts-e): Well ablated in literature while we run into anomaly which requires further investigation.
-* [Implementation description](#scope-and-implementation) of `Moedl` and `MoedlTrainer`
+* [Description](#scope-and-implementation) of `Moedl` and `MoedlTrainer`
 * [Future Plans](#future-plans)
 
 ##
@@ -91,13 +91,12 @@ For MoE configurations, the following parameters can be varied:
 * No load balancing is applied when both `lb_coeff` and `lb_gamma` are set to 0. And both are mutually exclusive currently, both larger than 0 throw error.
 * `capacity_factor`: factor controlling expert capacity threshold for token dropping. Setting this to 0 disables token dropping (i.e., dropless routing).
 
-Tests are developed to verify against Olmoe and DeepSeek V3 to ensure functional correctness of these features.
+
+The interplay between these configurables is [here](./src/moelab/moedl/configuration_moedl.py#L69-L100). The exact MoE execution logic can be found in the []`MoeBlk` forward pass](src/moelab/moedl/modeling_moedl.py#L179). Tests are developed and validated against OLMoE and DeepSeek-V3 to ensure functional correctness across configurations.
 
 #### [`MoedlTrainer`][MoedlTrainer]
 
-We subclass the HF `Trainer` to add MoE-specific training bookkeeping and logging, including routing statistics, expert load tracking, and fine-grained expert load heatmap generation with GIF collation. Of particular note is the `LoadBalanceBiasController`, which encapsulates router biasing control for load balancing; this is discussed in more detail in the load-balance strategy section. I encourage interested readers to review the [code][MoedlTrainer], which is self-explanatory with comments.
-
-<!-- tests? -->
+We subclass the HF `Trainer` to add MoE-specific training callbacks for bookkeeping and logging, including routing statistics, expert load tracking, and fine-grained expert load heatmap generation with GIF collation. A key component is the `LoadBalanceBiasController`, responsible for router biasing control in load balancing; I encourage to review the [code][MoedlTrainer], which is self-explanatory with comments.
 
 ##
 ### Load Balancing Strategy 
