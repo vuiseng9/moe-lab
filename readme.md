@@ -72,13 +72,13 @@ We choose TinyStories because the original paper demonstrates that models with a
 
 TinyStories is also easy to evaluate qualitatively: story coherence and logical consistency are readily observable, making it practical for comparing generation quality across MoE variants. In contrast, prior experience using GPT-2 or OPT models of similar scale trained on large, generic corpora often results in incoherent or unstructured generation due to capacity limits, making cross-model comparisons rely largely on numerical metrics.
 
-We use the LLaMA-2 tokenizer for its smaller 32K vocabs. After tokenization, the training set contains approximately 1B tokens. We limit most experiments to 2 epochs, based on the diminishing returns of longer epochs observed in [*Scaling Data-Constrained LMs*][dc-illa].
+We use the llama2 tokenizer for its smaller 32K vocabs. After tokenization, the training set contains approximately 1B tokens. We limit most experiments to 2 epochs, based on the diminishing returns of longer epochs observed in [*Scaling Data-Constrained LMs*][dc-illa].
 
 #### [`Moedl` Configurables][MoedlCfg] & [Implementation][MoedlImpl]
 
-This repo primarily focuses on the MoE layers. Since we set sight on 32K llama2 vocab, we might as well inherit the `Llama` (LLaMA-2) architecture as the starting point. Its attention stack also reflects the current standard: configurable GQA (MHA), RoPE, RMSNorm, and GLU-style MLPs. As a result, the standard LLaMA configurables are directly applicable to `Moedl`, including `hidden_size`, `intermediate_size`, `num_attention_heads`, `num_hidden_layers`, and related parameters.
+This repo primarily focuses on the MoE layers. Since we set sight on 32K llama2 vocab, we might as well inherit the `llama` (llama2) architecture as the starting point. Its attention stack also reflects the current standard: configurable GQA (MHA), RoPE, RMSNorm, and GLU-style MLPs. As a result, the standard llama configurables are directly applicable to `Moedl`, including `hidden_size`, `intermediate_size`, `num_attention_heads`, `num_hidden_layers`, and related parameters.
 
-`Moedl` can be configured as either a dense or an MoE model. As a sanity check, we train an equivalent LLaMA-2 dense model (`make 00_llama2_ref`) and a `Moedl` dense model (`make 01_moedl_dense`) on TinyStories. Equivalent training trajectories ensure architectural parity.
+`Moedl` can be configured as either a dense or an MoE model. As a sanity check, we train an equivalent llama2 dense model (`make 00_llama2_ref`) and a `Moedl` dense model (`make 01_moedl_dense`) on TinyStories. Equivalent training trajectories ensure architectural parity.
 
 For MoE configurations, the following parameters can be varied:
 
@@ -87,8 +87,8 @@ For MoE configurations, the following parameters can be varied:
 * `num_shared_experts`: number of shared experts, denoted as **ES** throughout.
 * `lb_coeff`: load-imbalance penalty coefficient. If set to 0, no loss-based penalty is added to the training objective.
 * `lb_gamma`: router biasing update rate. If set to 0, bias-based control is disabled.
-* No load balancing is applied when both `lb_coeff` and `lb_gamma` are set to 0. And both are mutually exclusive currently.
-* `capacity_factor`: expert capacity factor controlling token dropping. Setting this to 0 disables token dropping (i.e., dropless routing).
+* No load balancing is applied when both `lb_coeff` and `lb_gamma` are set to 0. And both are mutually exclusive currently, both larger than 0 throw error.
+* `capacity_factor`: factor controlling expert capacity threshold for token dropping. Setting this to 0 disables token dropping (i.e., dropless routing).
 
 Tests are developed to verify against Olmoe and DeepSeek V3 to ensure functional correctness of these features.
 
