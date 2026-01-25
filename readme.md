@@ -72,7 +72,7 @@ We choose TinyStories because the original paper demonstrates that models with a
 
 TinyStories is also easy to evaluate qualitatively: story coherence and logical consistency are readily observable, making it practical for comparing generation quality across MoE variants. In contrast, prior experience using GPT-2 or OPT models of similar scale trained on large, generic corpora often results in incoherent or unstructured generation due to capacity limits, making cross-model comparisons rely largely on numerical metrics.
 
-We use the LLaMA-2 tokenizer for its smaller 32K vocabs. After tokenization, the training set contains approximately XXX tokens. We limit most experiments to 2 epochs, based on the diminishing returns of longer epochs observed in [*Scaling Data-Constrained LMs*][dc-illa].
+We use the LLaMA-2 tokenizer for its smaller 32K vocabs. After tokenization, the training set contains approximately 1B tokens. We limit most experiments to 2 epochs, based on the diminishing returns of longer epochs observed in [*Scaling Data-Constrained LMs*][dc-illa].
 
 #### [`Moedl` Configurables][MoedlCfg] & [Implementation][MoedlImpl]
 
