@@ -1,6 +1,6 @@
 
 
-## moe-lab: Rigorous MoE Design Ablations You Can Run at Home
+## moe-lab: Rigorous MoE Design Ablations you can run at home
 *No Cluster, Single-GPU experiments using [`Moedl`][MoedlImpl], an MoE implementation built on Hugging Face Transformers*
 
 **Jump to**
@@ -12,7 +12,7 @@
 * [Scaling #Experts](#scaling-number-of-experts-e): Well ablated in literature while we run into anomaly which requires further investigation.
 * [Future Plans](#future-plans)
 
----
+##
 **Motivation:** 
 
 2025 is the year of reasoning and agents. It can also be argued as the year Mixture-of-Experts (MoE) models truly hit the mainstream. Virtually every flagship model from frontier labs is an MoE, although Google has been pioneering and popularizing the idea since [2017][og-moe-2017].
@@ -55,7 +55,7 @@ As a result, I decided to implement a new model type in local HF Transformers, `
     make gen-tinystories ckpt=vchua/moelab-e4-k1-4ep-tinystories  # moedl moe model
     ```
 
----
+##
 ### Scope and Implementation
 
 Our objectives are:
@@ -96,7 +96,7 @@ We subclass the HF `Trainer` to add MoE-specific training bookkeeping and loggin
 
 <!-- tests? -->
 
----
+##
 ### Load Balancing Strategy 
 > TLDR: Router biasing is surprisingly effective, easier to implement, requires less tuning!
 
