@@ -13,7 +13,7 @@
 * [Future Plans](#future-plans)
 
 ##
-**Motivation:** 
+#### Motivation
 
 2025 is the year of reasoning and agents. It can also be argued as the year Mixture-of-Experts (MoE) models truly hit the mainstream. Virtually every flagship model from frontier labs is an MoE, although Google has been pioneering and popularizing the idea since [2017][og-moe-2017].
 
@@ -23,7 +23,9 @@ Personally, I am particularly interested in understanding which components of Mo
 
 I intended to carry out these ablations using modest resources with HuggingFace (HF) Transformers. However, I could not find an implementation that exposes load balance biasing control. More importantly, there was no single MoE model type that allowed only contrasting a single axis of design choices while keeping most components consistent. For example, when comparing loss penalties versus biasing strategies for balancing expert load, I would like the attention layers to remain identical. DeepSeek V3 uses Multi-Latent Attention (MLA), which differs from the standard multi-head attention (MHA/MQA/GQA) used in models such as OLMoE or Qwen3, using/modifying existing implementations make direct comparisons unhygienic.
 
-As a result, I decided to implement a new model type in local HF Transformers, `Moedl` (no pun intended!😝). This allows individual design choices to be turned on or off in a controlled manner while keeping the rest of the architecture fixed. While some features are still work in progress and certain ablations require larger resources, I believe there is now sufficient material to document the observations and findings.
+As a result, I decided to implement a new model type in local HF Transformers, `Moedl` (no pun intended!😝). It is designed to enable individual design choices to be toggled on or off while keeping the rest fixed, providing the controlled environment needed for ablation studies.
+
+While some features are still work in progress and certain ablations require larger resources, I believe there is now sufficient material to document the observations and findings.
 
 #### Hit the ground running
 
@@ -44,7 +46,7 @@ As a result, I decided to implement a new model type in local HF Transformers, `
         b4_moedl_e16_k1      d4_moedl_s3_k1_e29   run-tests
         ``` 
     * **More customization**: use [`moelab_main.py`][main] like we use standard HF script. Do `python moelab_main.py --help` to see options.
-    * **Find LR**: Appending `--sweep_lr <list of comma-limited lr>` to `moelab_main.py` will turn it into learning rate sweep over input values for small number of steps which can be configured with `--sweep_lr_steps <num_steps>`. For experiments in the [`Makefile`][mkfile], just append sweep_lr=1 to the make command. e.g. `make c1_moedl_e8_k1 sweep_lr=1`. A report will be generated in the output folder and metrics of respective sweare logged to wandb.
+    * **Find LR**: Appending `--sweep_lr <list of comma-limited lr>` to `moelab_main.py` will turn it into learning rate sweep for small number of steps, which can be configured with `--sweep_lr_steps <num_steps>`. For experiments in the [`Makefile`][mkfile], just append sweep_lr=1 to the make command. e.g. `make c1_moedl_e8_k1 sweep_lr=1`. A report will be generated in the output folder and metrics of the sweep are also logged to wandb by default.
 
 * All runs are shared via [W&B project][wbproj], with [CSV export][csv] for quick result lookup.
 
@@ -68,7 +70,7 @@ All experiments use TinyStories, a synthetic [dataset][ts-ds] of short stories r
 
 We choose TinyStories because the original paper demonstrates that models with as few as ~10M parameters can already learn to generate fluent and logically consistent stories. This allows us to bound both model size and training compute, keeping experiments feasible on a single GPU while still uncovering meaningful ablation trends. MoE models in this repo are typically a few hundred million parameters, mostly around 400M total parameters with 12.5% sparsity, ~135M active parameters per token.
 
-TinyStories is also easy to evaluate qualitatively: story coherence and logical consistency are readily observable, making it practical for comparing MoE ablations at small scale. In contrast, prior experience using GPT-2 or OPT models of similar scale trained on large, generic corpora often results in incoherent or unstructured generation, making qualitative comparison across models unreliable or infeasible.
+TinyStories is also easy to evaluate qualitatively: story coherence and logical consistency are readily observable, making it practical for comparing generation quality across MoE variants. In contrast, prior experience using GPT-2 or OPT models of similar scale trained on large, generic corpora often results in incoherent or unstructured generation due to capacity limits, making cross-model comparisons rely largely on numerical metrics.
 
 We use the LLaMA-2 tokenizer for its smaller 32K vocabs. After tokenization, the training set contains approximately XXX tokens. We limit most experiments to 2 epochs, based on the diminishing returns of longer epochs observed in [*Scaling Data-Constrained LMs*][dc-illa].
 
