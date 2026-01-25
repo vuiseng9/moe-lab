@@ -96,7 +96,7 @@ The interplay between these configurables is [here](./src/moelab/moedl/configura
 
 #### [`MoedlTrainer`][MoedlTrainer]
 
-We subclass the HF `Trainer` to add MoE-specific training callbacks for bookkeeping and logging, including routing statistics, expert load tracking, and fine-grained expert load heatmap generation with GIF collation. A key component is the `LoadBalanceBiasController`, responsible for router biasing control in load balancing; I encourage to review the [code][MoedlTrainer], which is self-explanatory with comments.
+We subclass the HF `Trainer` to add MoE-specific training callbacks for bookkeeping and logging, including routing statistics, expert load tracking, and fine-grained expert load heatmap generation with GIF collation. A key component is the `LoadBalanceBiasController`, responsible for router biasing control (Eq.3) in load balancing; encourage to review the [code][MoedlTrainer].
 
 ##
 ### Load Balancing Strategy 
