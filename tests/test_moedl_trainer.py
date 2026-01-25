@@ -1,12 +1,7 @@
 """
-Tests for MoedlTrainer.
+Note: The test code was primarily generated with assistance from Claude Sonnet 4.5, based on provided specifications and instructions.
 
-Tests cover:
-1. Dense model training (num_experts=1)
-2. MoE model training with lb_coeff=0
-3. MoE model training with lb_coeff>0
-4. Expert statistics computation
-5. Wandb logging integration
+Tests for MoedlTrainer.
 """
 import pytest
 import torch

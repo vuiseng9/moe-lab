@@ -1,10 +1,7 @@
 """
-Minimal tests for Moedl model.
+Note: The test code was primarily generated with assistance from Claude Sonnet 4.5, based on provided specifications and instructions.
 
-Tests cover:
-1. Constructor tests (success and failure cases)
-2. Equivalency tests with Llama (forward and backward)
-3. Generate function tests
+Tests for Moedl model.
 """
 import pytest
 import torch
