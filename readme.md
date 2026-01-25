@@ -4,12 +4,13 @@
 *No Cluster, Single-GPU experiments using [`Moedl`][MoedlImpl], an MoE implementation built on Hugging Face Transformers*
 
 **Jump to**
-* Addressing the elephant first: Which [Load Balancing Strategy](#load-balancing-strategy)? This [animated heatmaps][large-hp] settles the debate.
+* Addressing the elephant first, which [Load Balancing Strategy](#load-balancing-strategy)? This [animated heatmaps][large-hp] settles the debate.
 * [Hit the ground running](#hit-the-ground-running): Hands-on guide.
 * Smaller Experts, More of Them: [Resolution and Granularity](#moe-resolution--expert-granularity).
 * [Shared Experts?](#are-shared-experts-mandatory) Probably not compelling enough to be worth the effort.
 * Token Dropping is pretty much irrelevant with proper load balancing. So [Don't!](#limiting-expert-capacity-to-drop-tokens-or-not-dont)
 * [Scaling #Experts](#scaling-number-of-experts-e): Well ablated in literature while we run into anomaly which requires further investigation.
+* [Implementation description](#scope-and-implementation) of `Moedl` and `MoedlTrainer`
 * [Future Plans](#future-plans)
 
 ##
