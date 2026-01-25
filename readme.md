@@ -177,7 +177,7 @@ While expert-specific coefficients could be introduced for the imbalance penalty
 
 Based on these results, we adopt router biasing as the default load-balancing strategy for the remaining ablations.
 
----
+##
 ### Scaling Number of Experts (E)
 
 With a stable and effective load-balancing strategy in place, we now turn to the question of scale. Specifically, we examine how increasing the number of experts impacts overall model performance. Following [Switch Transformer][switch] study, we fix K=1, one activated expert per token to keep computation roughly constant to dense counterpart (aside from minor router overhead) and scale the number of experts by doubling from 1 to 16.
@@ -199,7 +199,7 @@ Contrary to most ablations in the literature (e.g., Fig. 1 in [Switch Transforme
 
 *We will revisit this once we improve the underlying kernel efficiency. At the moment, MoE layers are implemented by naively looping over experts (the standard HF approach). We plan to integrate a more efficient grouped GEMM implementation.*
 
----
+##
 ### MoE Resolution & Expert Granularity
 
 [DeepSeekMoE][ds-moe] is among the first to propose *fine-grained expert segmentation*, also referred to as *expert granularity*. The core idea is to **use smaller experts but more of them**. We supplement granularity with the term **resolution**, as it directly reflects the actual E:K config, and implicitly conveys the sparsity ratio.
@@ -215,7 +215,7 @@ The effectiveness of higher resolution can be reasoned about combinatorially. Fo
 
 We ablate MoE models at a fixed sparsity ratio of 12.5% while increasing resolution: E:K = 8:1, 16:2, 32:4, and 64:8. Total model parameters are kept approximately constant at 400M by adjusting the expert hidden size. The benefit of higher resolution is clearly observed empirically: as resolution increases, model performance improves. However, the gains eventually saturate, we attribute the diminishing returns to under-training of smaller experts or data starvation. Our observed trends are consistent with prior results reported in [DeepSeekMoE's Table 1][ds-moe] and [OLMoE ablations (Fig. 5)][olmoe].
 
----
+##
 ### Are Shared Experts Mandatory?
 
 In addition to finer-grained experts, [DeepSeekMoE][ds-moe] also advocates the use of ___shared experts___, where a subset of experts is activated for every token. The rationale is that certain forms of common knowledge may be universal, and sharing experts could reduce parameter redundancy and improve learning efficiency.
@@ -239,7 +239,7 @@ Given the lightweight nature of our setup, we are able to explore this design ax
 
 Moreover, shared experts can be viewed as inherently load-imbalanced, as they are activated for every token by design. The practical ramifications of this behavior remain unclear (at least to me at the moment). As such, we do not recommend shared experts as a default design choice.
 
----
+##
 ### Limiting Expert Capacity: To Drop Tokens or Not? Don’t.
 
 Since the early days of MoE research, Google has employed fixed expert capacity, largely because TPUs and the XLA compiler require tensor shapes to be known statically; dynamically varying token counts at runtime are challenging to support. By expert capacity, each expert is allowed to process only a limited number of tokens during routing. Tokens exceeding this capacity are dropped, i.e., they are not processed by any expert.
@@ -262,7 +262,7 @@ To make this concrete, we enclose the total number of dropped tokens over traini
 
 A little nuance though, CF=1.5 and CF=2.0 converge slightly worse than CF=1.0. We suspect this is variance, or that early-stage token dropping can have lasting impact on model learning. Regardless, the trend is clear: **token dropping is not beneficial.** Also crucially, router biasing effectively mitigates expert overload, making capacity-based token dropping unnecessary. *So, don't drop tokens!*
 
----
+##
 ### Conclusion
 
 Our ablations suggest: Use router biasing for load balancing. Prefer MoE with higher resolution - small experts, more of them, but watch for diminishing returns. Skip shared experts and token dropping.
