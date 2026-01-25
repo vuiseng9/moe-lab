@@ -30,7 +30,7 @@ As a result, I decided to implement a new model type in local HF Transformers, `
 * **Install**: clone and `make install-moelab` or `make install-dev-moelab`
 * **Test**: `make run-tests`
 * **Run**: 
-    * `make <experiment-id>`, see [`Makefile`][mkfile]. Most experiments can fit within a single 80GB GPU. Each took about 3 hrs on a RTX Pro 6000 gpu.
+    * `make <experiment-id>`, see [`Makefile`][mkfile]. Most experiments can fit within a single 80GB GPU. Most took around 3-5 hrs on a RTX Pro 6000 gpu.
         ```bash
         # Available make targets (Experiments)
         00_llama2_ref        b20_moedl_e4_k1_4ep  e1_moedl_cf_1.0
@@ -46,7 +46,7 @@ As a result, I decided to implement a new model type in local HF Transformers, `
     * **More customization**: use [`moelab_main.py`][main] like we use standard HF script. Do `python moelab_main.py --help` to see options.
     * **Find LR**: Appending `--sweep_lr <list of comma-limited lr>` to `moelab_main.py` will turn it into learning rate sweep over input values for small number of steps which can be configured with `--sweep_lr_steps <num_steps>`. For experiments in the [`Makefile`][mkfile], just append sweep_lr=1 to the make command. e.g. `make c1_moedl_e8_k1 sweep_lr=1`. A report will be generated in the output folder and metrics of respective sweare logged to wandb.
 
-* All runs are shared on [W&B project][wbproj]. 
+* All runs are shared via [W&B project][wbproj], with [CSV export][csv] for quick result lookup.
 
 * Qualitative Eval per [TinyStories][ts-paper].
     ```bash
@@ -290,6 +290,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
 [main]: ./moelab_main.py
 [large-hp]: ./assets/compare_lb_strategy_heatmaps.gif
+[csv]: ./results.csv
 
 [megablocks]: http://arxiv.org/abs/2211.15841
 [ds-moe]: http://arxiv.org/abs/2401.06066
