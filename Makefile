@@ -82,22 +82,22 @@ __pretrain-tinystories: gpulist-check-busy
 _llama2-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type llama \
-		--config_overrides hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
+		--config_overrides hidden_size=768,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 _moedl-dense-ts:
 	$(MAKE) __pretrain-tinystories \
 	model_cfg="--model_type moedl \
-		--config_overrides num_experts=1,num_active_experts=1,hidden_size=768,num_hidden_layers=4,num_attention_heads=16,num_key_value_heads=16,head_dim=48,intermediate_size=2048 \
+		--config_overrides num_experts=1,num_active_experts=1,hidden_size=768,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Training Convergence Sanity between Moedl (dense) and Llama2
 # ───────────────────────────────────────────────────────────────────────────────
 00_llama2_ref:
-	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=1e-3 
+	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=8e-4 
 
 01_moedl_dense:
-	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=1e-3
+	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=8e-4
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Load Balancing Ablations 
