@@ -54,8 +54,8 @@ While some features are still work in progress and certain ablations require lar
 * Qualitative Eval per [TinyStories][ts-paper].
     ```bash
     make gen-tinystories ckpt=roneneldan/TinyStories-33M  # official dense GPTNeo model
-    make gen-tinystories ckpt=<to add soon>  # moedl dense model
-    make gen-tinystories ckpt=<to add soon>  # moedl moe model
+    make gen-tinystories ckpt=vuiseng9/01_moedl_dense-0119 # moedl dense model
+    make gen-tinystories ckpt=vuiseng9/c3_moedl_e32_k4-0119 # moedl moe model
     ```
 
 ##
@@ -138,7 +138,7 @@ Dubbed as *auxiliary loss-free load balancing*, DeepSeek V3 introduced an altern
 &emsp; $b_{lb} \leftarrow b_{lb} + \gamma(\bar{f} - f)$ &emsp; (every $N$ steps)   ── Eq.3
 
 &emsp; where &emsp;
-* $\mathbf{f} \in \mathbb{R}^{E}$ is the observed expert-load fraction averaged over $N$ steps. Simplest N=1 would be after every optimizer stepping.
+* $\mathbf{f} \in \mathbb{R}^{E}$ is the observed expert-load fraction averaged over $N$ steps. Simplest would be N=1, i.e. after every optimizer stepping.
 * $\bar{f} = \tfrac{1}{E}\mathbf{1}$ is the uniform target load.
 * $\gamma$ is the bias update rate.
 
@@ -244,7 +244,7 @@ Moreover, shared experts can be viewed as inherently load-imbalanced, as they ar
 ##
 ### Limiting Expert Capacity: To Drop Tokens or Not? Don’t.
 
-Since the early days of MoE research, Google has employed fixed expert capacity, largely because TPUs and the XLA compiler require tensor shapes to be known statically; dynamically varying token counts at runtime are challenging to support. By expert capacity, each expert is allowed to process only a limited number of tokens during routing. Tokens exceeding this capacity are dropped, i.e., they are not processed by any expert.
+Since the early days of MoE research, Google has employed fixed expert capacity, largely because TPUs and the XLA compiler require tensor shapes to be known [statically][switch]; dynamically varying token counts at runtime are challenging to support. By expert capacity, each expert is allowed to process only a limited number of tokens during routing. Tokens exceeding this capacity are dropped, i.e., they are not processed by any expert.
 
 Concretely, the **capacity factor (CF)** controls this limit:
 
@@ -286,13 +286,17 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 
 
 [mkfile]: ./Makefile
-[wbproj]: https://wandb.ai/vchua/moe-lab-2026-0119
 [MoedlCfg]: ./src/moelab/moedl/configuration_moedl.py
 [MoedlImpl]: ./src/moelab/moedl/modeling_moedl.py
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
 [main]: ./moelab_main.py
 [large-hp]: ./assets/compare_lb_strategy_heatmaps.gif
 [csv]: ./results.csv
+[hf-moedl]: https://huggingface.co/vuiseng9/c3_moedl_e32_k4-0119
+[hf-moedl-dense]: https://huggingface.co/vuiseng9/01_moedl_dense-0119
+
+[wbproj]: https://wandb.ai/vchua/moe-lab-2026-0119
+[ts-ds]: https://huggingface.co/roneneldan/TinyStories-33M
 
 [megablocks]: http://arxiv.org/abs/2211.15841
 [ds-moe]: http://arxiv.org/abs/2401.06066
@@ -307,7 +311,6 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [kimi-k2-report]: https://github.com/MoonshotAI/Kimi-K2/blob/main/tech_report.pdf
 [og-moe-2017]: https://arxiv.org/abs/1701.06538 
 [ts-paper]: http://arxiv.org/abs/2305.07759
-[ts-ds]: https://huggingface.co/roneneldan/TinyStories-33M
 [nv-upcycle]: http://arxiv.org/abs/2410.07524
 [dc-illa]:http://arxiv.org/abs/2305.16264
 
