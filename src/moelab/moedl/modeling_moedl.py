@@ -142,6 +142,23 @@ class MoedlMLP(nn.Module):
         down_proj = self.down(self.act(self.gate(x)) * self.up(x))
         return down_proj
 
+class ExpertBank(nn.ModuleList):
+    def __init__(self, config: MoedlConfig):
+        super().__init__([MoedlMLP(config) for _ in range(config.num_experts)])
+        self.num_experts = config.num_experts
+    
+    def forward(self, x, scores, k_ids):
+        assert x.ndim == 2, "ExpertBank forward only support 2d input of shape (T, D)"
+        
+        moe_outputs = torch.zeros_like(x) 
+        
+        for eid, expert in enumerate(self):
+            tok_ids, which_k = torch.where(k_ids == eid)
+            tokens = x[tok_ids]
+            weights = scores[tok_ids, which_k].unsqueeze(-1) 
+            moe_outputs[tok_ids, :] += expert(tokens) * weights
+
+        return moe_outputs
 
 class MoeBlk(nn.Module):
     def __init__(self, config: MoedlConfig):
@@ -155,7 +172,8 @@ class MoeBlk(nn.Module):
         self.n_drop = 0  # total dropped by all experts in previous forward pass
 
         self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
-        self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
+        self.experts = ExpertBank(config)
+        # self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
         if self.num_shared_experts > 0:
             self.common = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_shared_experts)])
     
@@ -226,44 +244,48 @@ class MoeBlk(nn.Module):
             expert_capacity = int( (T*K/E) * self.capacity_factor )
             assert expert_capacity > 0, "expert_capacity must be positive. capacity_factor too small?"
 
+        assert expert_capacity is None, "Temporarily not support expert capacity for dev, switch them off"
+        
         # == Expert Computation and Accumulation ==
         # initialize output buffer, per token, output dimension
         # accumulate directly for every k slot.
         # accumulation save buffer space.
-        moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
+        moe_outputs = self.experts(_x, k_weights, k_ids)
 
-        # loop over experts
-        for eid in range(E):
-            # tok_ids: indices of tokens to be attended by expert eid 
-            # which_k: for each token, which k slot it is from 0 to K 
-            tok_ids, which_k = torch.where(k_ids == eid)
+        # moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
 
-            if expert_capacity and tok_ids.numel() > expert_capacity:
-                # = Dropping path ===
-                # sorted=False is critical for order preservation
-                if self.lb_gamma > 0.0:
-                    _, keep_i = torch.topk(biased_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
-                else:
-                    _, keep_i = torch.topk(router_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+        # # loop over experts
+        # for eid in range(E):
+        #     # tok_ids: indices of tokens to be attended by expert eid 
+        #     # which_k: for each token, which k slot it is from 0 to K 
+        #     tok_ids, which_k = torch.where(k_ids == eid)
+
+        #     if expert_capacity and tok_ids.numel() > expert_capacity:
+        #         # = Dropping path ===
+        #         # sorted=False is critical for order preservation
+        #         if self.lb_gamma > 0.0:
+        #             _, keep_i = torch.topk(biased_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+        #         else:
+        #             _, keep_i = torch.topk(router_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
                 
-                keep_tok_ids = tok_ids[keep_i]
-                keep_which_k = which_k[keep_i]
+        #         keep_tok_ids = tok_ids[keep_i]
+        #         keep_which_k = which_k[keep_i]
 
-                expert = self.experts[eid]
-                tokens = _x[keep_tok_ids]
-                weights = k_weights[keep_tok_ids, keep_which_k].unsqueeze(-1)
+        #         expert = self.experts[eid]
+        #         tokens = _x[keep_tok_ids]
+        #         weights = k_weights[keep_tok_ids, keep_which_k].unsqueeze(-1)
 
-                moe_outputs[keep_tok_ids, :] += expert(tokens) * weights 
+        #         moe_outputs[keep_tok_ids, :] += expert(tokens) * weights 
 
-                self.n_drop += int(tok_ids.numel() - expert_capacity)
-            else:
-                # = Dropless path ===
-                # current gather tokens, extract corresponding weights
-                expert = self.experts[eid]
-                tokens = _x[tok_ids]
-                weights = k_weights[tok_ids, which_k].unsqueeze(-1) 
-                # forward pass, output accumulate back to moe_outputs
-                moe_outputs[tok_ids, :] += expert(tokens) * weights
+        #         self.n_drop += int(tok_ids.numel() - expert_capacity)
+        #     else:
+        #         # = Dropless path ===
+        #         # current gather tokens, extract corresponding weights
+        #         expert = self.experts[eid]
+        #         tokens = _x[tok_ids]
+        #         weights = k_weights[tok_ids, which_k].unsqueeze(-1) 
+        #         # forward pass, output accumulate back to moe_outputs
+        #         moe_outputs[tok_ids, :] += expert(tokens) * weights
 
         # loop over shared experts
         for sid in range(self.num_shared_experts):
