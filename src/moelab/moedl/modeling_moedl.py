@@ -25,6 +25,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.generic import check_model_inputs
 from .configuration_moedl import MoedlConfig
 
+from .naive_autograd_grouped_gemm import NaiveGroupedGemmFunc
 
 if is_flash_attn_available():
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
@@ -147,18 +148,54 @@ class ExpertBank(nn.ModuleList):
         super().__init__([MoedlMLP(config) for _ in range(config.num_experts)])
         self.num_experts = config.num_experts
     
+    @property
+    def Wgate_list(self):
+        return [expert.gate.weight for expert in self]
+
+    @property
+    def Wup_list(self):
+        return [expert.up.weight for expert in self]
+    
+    @property
+    def Wdown_list(self):
+        return [expert.down.weight for expert in self]
+
     def forward(self, x, scores, k_ids):
         assert x.ndim == 2, "ExpertBank forward only support 2d input of shape (T, D)"
         
-        moe_outputs = torch.zeros_like(x) 
-        
-        for eid, expert in enumerate(self):
+        X_list = [None] * self.num_experts
+        tok_ids_scores = [None] * self.num_experts
+
+        # dispatch
+        for eid in range(self.num_experts):
             tok_ids, which_k = torch.where(k_ids == eid)
             tokens = x[tok_ids]
-            weights = scores[tok_ids, which_k].unsqueeze(-1) 
-            moe_outputs[tok_ids, :] += expert(tokens) * weights
+            X_list[eid] = tokens
+            tok_ids_scores[eid] = (tok_ids, scores[tok_ids, which_k].unsqueeze(-1))
 
+        # expert compute
+        Ygate_list = NaiveGroupedGemmFunc.apply(self.num_experts, *(X_list + self.Wgate_list))
+        Yup_list   = NaiveGroupedGemmFunc.apply(self.num_experts, *(X_list + self.Wup_list))
+        actfn = self[0].act # doens't matter which expert we pick, they share the same activation function
+        Xdown_list = [actfn(g)*u for g, u in zip(Ygate_list, Yup_list)]
+        Ydown_list = NaiveGroupedGemmFunc.apply(self.num_experts, *(Xdown_list + self.Wdown_list))
+        
+        # combine
+        moe_outputs = torch.zeros_like(x) 
+        for eid, (tok_ids, score) in enumerate(tok_ids_scores):
+            # moe_outputs.index_add_(0, tok_ids, Ydown_list[eid] * score)
+            moe_outputs[tok_ids, :] += Ydown_list[eid] * score
         return moe_outputs
+    
+    # def forward(self, x, scores, k_ids):
+    #     assert x.ndim == 2, "ExpertBank forward only support 2d input of shape (T, D)"
+    #     moe_outputs = torch.zeros_like(x) 
+    #     for eid, expert in enumerate(self):
+    #         tok_ids, which_k = torch.where(k_ids == eid)
+    #         tokens = x[tok_ids]
+    #         weights = scores[tok_ids, which_k].unsqueeze(-1) 
+    #         moe_outputs[tok_ids, :] += expert(tokens) * weights
+    #     return moe_outputs
 
 class MoeBlk(nn.Module):
     def __init__(self, config: MoedlConfig):
