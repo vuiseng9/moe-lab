@@ -291,7 +291,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
 [main]: ./moelab_main.py
 [large-hp]: ./assets/compare_lb_strategy_heatmaps.gif
-[csv]: ./results.csv
+[csv]: ./assets/results.csv
 [hf-moedl]: https://huggingface.co/vuiseng9/c3_moedl_e32_k4-0119
 [hf-moedl-dense]: https://huggingface.co/vuiseng9/01_moedl_dense-0119
 
