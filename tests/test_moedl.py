@@ -1973,12 +1973,14 @@ except Exception as e:
             trust_remote_code=True
         )
         
-        # Test forward pass
+        # Test forward pass on GPU (triton kernel requires CUDA)
+        device = "cuda"
         batch_size, seq_len = 2, 16
-        input_ids = torch.randint(0, tiny_moe_config.vocab_size, (batch_size, seq_len))
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, tiny_moe_config.vocab_size, (batch_size, seq_len), device=device)
         
-        original_model.eval()
-        loaded_model.eval()
+        original_model.to(device, dtype=torch.bfloat16).eval()
+        loaded_model.to(device, dtype=torch.bfloat16).eval()
         
         with torch.no_grad():
             original_output = original_model(input_ids)
@@ -1988,8 +1990,8 @@ except Exception as e:
         torch.testing.assert_close(
             original_output.logits,
             loaded_output.logits,
-            rtol=1e-5,
-            atol=1e-6
+            rtol=1e-4,
+            atol=1e-4
         )
     
     def test_loaded_model_generation(self, tmp_path, tiny_moe_config):
@@ -2005,10 +2007,12 @@ except Exception as e:
             trust_remote_code=True
         )
         
-        loaded_model.eval()
+        # Move to GPU (triton kernel requires CUDA)
+        device = "cuda"
+        loaded_model.to(device).eval()
         
         # Test generation
-        input_ids = torch.randint(0, tiny_moe_config.vocab_size, (1, 5))
+        input_ids = torch.randint(0, tiny_moe_config.vocab_size, (1, 5), device=device)
         
         with torch.no_grad():
             generated = loaded_model.generate(
@@ -2100,9 +2104,10 @@ except Exception as e:
         assert loaded_model.config.lb_gamma == 0.01
         assert loaded_model.config.lb_coeff == 0.0
         
-        # Test forward pass
-        input_ids = torch.randint(0, 500, (2, 16))
-        loaded_model.eval()
+        # Test forward pass on GPU (triton kernel requires CUDA)
+        device = "cuda"
+        input_ids = torch.randint(0, 500, (2, 16), device=device)
+        loaded_model.to(device).eval()
         
         with torch.no_grad():
             outputs = loaded_model(input_ids)

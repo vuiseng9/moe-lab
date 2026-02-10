@@ -25,7 +25,8 @@ from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.generic import check_model_inputs
 from .configuration_moedl import MoedlConfig
 
-from .naive_autograd_grouped_gemm import NaiveGroupedGemmFunc
+from .autograd_grouped_gemm import GroupedGemmFunc
+from .grouped_gemm_triton import group_gemm_fn as _group_gemm_fn  # noqa: F401
 
 if is_flash_attn_available():
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
@@ -143,7 +144,7 @@ class MoedlMLP(nn.Module):
         down_proj = self.down(self.act(self.gate(x)) * self.up(x))
         return down_proj
 
-class ExpertBank(nn.ModuleList):
+class GLUExperts(nn.ModuleList):
     def __init__(self, config: MoedlConfig):
         super().__init__([MoedlMLP(config) for _ in range(config.num_experts)])
         self.num_experts = config.num_experts
@@ -160,42 +161,15 @@ class ExpertBank(nn.ModuleList):
     def Wdown_list(self):
         return [expert.down.weight for expert in self]
 
-    def forward(self, x, scores, k_ids):
-        assert x.ndim == 2, "ExpertBank forward only support 2d input of shape (T, D)"
-        
-        X_list = [None] * self.num_experts
-        tok_ids_scores = [None] * self.num_experts
+    def forward(self, X_list):
 
-        # dispatch
-        for eid in range(self.num_experts):
-            tok_ids, which_k = torch.where(k_ids == eid)
-            tokens = x[tok_ids]
-            X_list[eid] = tokens
-            tok_ids_scores[eid] = (tok_ids, scores[tok_ids, which_k].unsqueeze(-1))
-
-        # expert compute
-        Ygate_list = NaiveGroupedGemmFunc.apply(self.num_experts, *(X_list + self.Wgate_list))
-        Yup_list   = NaiveGroupedGemmFunc.apply(self.num_experts, *(X_list + self.Wup_list))
+        Ygate_list = GroupedGemmFunc.apply(self.num_experts, *(X_list + self.Wgate_list))
+        Yup_list   = GroupedGemmFunc.apply(self.num_experts, *(X_list + self.Wup_list))
         actfn = self[0].act # doens't matter which expert we pick, they share the same activation function
         Xdown_list = [actfn(g)*u for g, u in zip(Ygate_list, Yup_list)]
-        Ydown_list = NaiveGroupedGemmFunc.apply(self.num_experts, *(Xdown_list + self.Wdown_list))
-        
-        # combine
-        moe_outputs = torch.zeros_like(x) 
-        for eid, (tok_ids, score) in enumerate(tok_ids_scores):
-            # moe_outputs.index_add_(0, tok_ids, Ydown_list[eid] * score)
-            moe_outputs[tok_ids, :] += Ydown_list[eid] * score
-        return moe_outputs
+        Ydown_list = GroupedGemmFunc.apply(self.num_experts, *(Xdown_list + self.Wdown_list))
+        return Ydown_list
     
-    # def forward(self, x, scores, k_ids):
-    #     assert x.ndim == 2, "ExpertBank forward only support 2d input of shape (T, D)"
-    #     moe_outputs = torch.zeros_like(x) 
-    #     for eid, expert in enumerate(self):
-    #         tok_ids, which_k = torch.where(k_ids == eid)
-    #         tokens = x[tok_ids]
-    #         weights = scores[tok_ids, which_k].unsqueeze(-1) 
-    #         moe_outputs[tok_ids, :] += expert(tokens) * weights
-    #     return moe_outputs
 
 class MoeBlk(nn.Module):
     def __init__(self, config: MoedlConfig):
@@ -209,7 +183,7 @@ class MoeBlk(nn.Module):
         self.n_drop = 0  # total dropped by all experts in previous forward pass
 
         self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
-        self.experts = ExpertBank(config)
+        self.experts = GLUExperts(config)
         # self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
         if self.num_shared_experts > 0:
             self.common = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_shared_experts)])
@@ -281,48 +255,49 @@ class MoeBlk(nn.Module):
             expert_capacity = int( (T*K/E) * self.capacity_factor )
             assert expert_capacity > 0, "expert_capacity must be positive. capacity_factor too small?"
 
-        assert expert_capacity is None, "Temporarily not support expert capacity for dev, switch them off"
-        
         # == Expert Computation and Accumulation ==
         # initialize output buffer, per token, output dimension
         # accumulate directly for every k slot.
         # accumulation save buffer space.
-        moe_outputs = self.experts(_x, k_weights, k_ids)
+        # moe_outputs = self.experts(_x, k_weights, k_ids)
 
-        # moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
+        X_list = [None] * self.num_experts
+        tok_ids_scores = [None] * self.num_experts
 
-        # # loop over experts
-        # for eid in range(E):
-        #     # tok_ids: indices of tokens to be attended by expert eid 
-        #     # which_k: for each token, which k slot it is from 0 to K 
-        #     tok_ids, which_k = torch.where(k_ids == eid)
+        # dispatch
+        for eid in range(self.num_experts):
+            tok_ids, which_k = torch.where(k_ids == eid)
 
-        #     if expert_capacity and tok_ids.numel() > expert_capacity:
-        #         # = Dropping path ===
-        #         # sorted=False is critical for order preservation
-        #         if self.lb_gamma > 0.0:
-        #             _, keep_i = torch.topk(biased_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
-        #         else:
-        #             _, keep_i = torch.topk(router_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+            if expert_capacity and tok_ids.numel() > expert_capacity:
+                # = Dropping path ===
+                self.n_drop += int(tok_ids.numel() - expert_capacity)
+                # sorted=False is critical for order preservation
+                if self.lb_gamma > 0.0:
+                    _, keep_i = torch.topk(biased_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+                else:
+                    _, keep_i = torch.topk(router_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
                 
-        #         keep_tok_ids = tok_ids[keep_i]
-        #         keep_which_k = which_k[keep_i]
+                keep_tok_ids = tok_ids[keep_i]
+                keep_which_k = which_k[keep_i]
 
-        #         expert = self.experts[eid]
-        #         tokens = _x[keep_tok_ids]
-        #         weights = k_weights[keep_tok_ids, keep_which_k].unsqueeze(-1)
+                tokens = _x[keep_tok_ids]
+                X_list[eid] = tokens
+                tok_ids_scores[eid] = (keep_tok_ids, k_weights[keep_tok_ids, keep_which_k].unsqueeze(-1))
+            else:
+                # = Dropless path ===
+                # current gather tokens, extract corresponding weights
+                tokens = _x[tok_ids]
+                X_list[eid] = tokens
+                tok_ids_scores[eid] = (tok_ids, k_weights[tok_ids, which_k].unsqueeze(-1))
 
-        #         moe_outputs[keep_tok_ids, :] += expert(tokens) * weights 
+        # expert compute
+        Y_list = self.experts(X_list)
 
-        #         self.n_drop += int(tok_ids.numel() - expert_capacity)
-        #     else:
-        #         # = Dropless path ===
-        #         # current gather tokens, extract corresponding weights
-        #         expert = self.experts[eid]
-        #         tokens = _x[tok_ids]
-        #         weights = k_weights[tok_ids, which_k].unsqueeze(-1) 
-        #         # forward pass, output accumulate back to moe_outputs
-        #         moe_outputs[tok_ids, :] += expert(tokens) * weights
+        # combine
+        moe_outputs = torch.zeros_like(_x) 
+        for eid, (tok_ids, score) in enumerate(tok_ids_scores):
+            # moe_outputs.index_add_(0, tok_ids, Ydown_list[eid] * score)
+            moe_outputs[tok_ids, :] += Y_list[eid] * score
 
         # loop over shared experts
         for sid in range(self.num_shared_experts):
@@ -738,17 +713,27 @@ class MoedlPreTrainedModel(PreTrainedModel):
         "attentions": MoedlAttention,
     }
 
+    # Files needed for trust_remote_code=True loading.
+    _REMOTE_CODE_FILES = [
+        "configuration_moedl.py",
+        "modeling_moedl.py",
+        "autograd_grouped_gemm.py",
+        "grouped_gemm_triton.py",
+    ]
+
     def save_pretrained(self, save_directory, *args, **kwargs):
         super().save_pretrained(save_directory, *args, **kwargs)
-        # copy over modeling_moedl.py and configuration_moedl.py to the save directory 
-        # for loading trust_remote_code=True
+        # copy over source files to the save directory
+        # for loading with trust_remote_code=True
         save_dir = Path(save_directory)
         if not save_dir.is_dir():
             logger.warning(f"Moedl: save_pretrained did not create {save_dir}; skipping remote-code file copy.")
             return
         src_dir = Path(__file__).resolve().parent
-        shutil.copy2(src_dir / "configuration_moedl.py", save_dir / "configuration_moedl.py")
-        shutil.copy2(src_dir / "modeling_moedl.py", save_dir / "modeling_moedl.py")
+        for fname in self._REMOTE_CODE_FILES:
+            src_file = src_dir / fname
+            if src_file.exists():
+                shutil.copy2(src_file, save_dir / fname)
 
 
 # Copied from transformers.models.llama.modeling_llama.LlamaModel with Llama->Moedl
