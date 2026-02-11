@@ -63,7 +63,6 @@ def training_args(tmp_path):
         logging_steps=1,
         save_steps=100,
         report_to=[],  # No reporting by default
-        use_cpu=True,  # Force CPU to avoid device mismatch in tests
     )
 
 
@@ -147,9 +146,10 @@ class TestMoedlTrainerDenseModel:
         )
         
         # Get a batch
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
         }
         
         # Compute loss
@@ -176,9 +176,10 @@ class TestMoedlTrainerDenseModel:
         mock_wandb = Mock()
         trainer._wb_handler = mock_wandb
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
         }
         
         # Compute loss - should not call wandb for dense model
@@ -201,9 +202,10 @@ class TestMoedlTrainerMoeModel:
             heatmap_on=False,
         )
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
         }
         
         loss, outputs = trainer.compute_loss(
@@ -228,9 +230,10 @@ class TestMoedlTrainerMoeModel:
             heatmap_on=False,
         )
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
         }
         
         loss, outputs = trainer.compute_loss(
@@ -326,9 +329,10 @@ class TestMoedlTrainerExpertStats:
             heatmap_on=False,
         )
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
         }
         
         with torch.no_grad():
@@ -359,9 +363,10 @@ class TestMoedlTrainerExpertStats:
         batch_size, seq_len = 2, 5
         total_tokens = batch_size * seq_len
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (batch_size, seq_len)),
-            "labels": torch.randint(0, 1000, (batch_size, seq_len)),
+            "input_ids": torch.randint(0, 1000, (batch_size, seq_len), device=device),
+            "labels": torch.randint(0, 1000, (batch_size, seq_len), device=device),
         }
         
         with torch.no_grad():
@@ -386,9 +391,10 @@ class TestMoedlTrainerExpertStats:
             heatmap_on=False,
         )
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (2, 10)),  # Larger batch for better stats
-            "labels": torch.randint(0, 1000, (2, 10)),
+            "input_ids": torch.randint(0, 1000, (2, 10), device=device),  # Larger batch for better stats
+            "labels": torch.randint(0, 1000, (2, 10), device=device),
         }
         
         with torch.no_grad():
@@ -417,9 +423,10 @@ class TestMoedlTrainerExpertStats:
         batch_size, seq_len = 2, 5
         num_items_in_batch = batch_size * seq_len
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (batch_size, seq_len)),
-            "labels": torch.randint(0, 1000, (batch_size, seq_len)),
+            "input_ids": torch.randint(0, 1000, (batch_size, seq_len), device=device),
+            "labels": torch.randint(0, 1000, (batch_size, seq_len), device=device),
         }
         
         with torch.no_grad():
@@ -483,9 +490,10 @@ class TestMoedlTrainerIntegration:
             heatmap_on=False,
         )
         
+        device = next(model.parameters()).device
         batch = {
-            "input_ids": torch.randint(0, 1000, (2, 5)),
-            "labels": torch.randint(0, 1000, (2, 5)),
+            "input_ids": torch.randint(0, 1000, (2, 5), device=device),
+            "labels": torch.randint(0, 1000, (2, 5), device=device),
         }
         
         # Test with return_outputs=False
@@ -736,7 +744,8 @@ class TestMoedlTrainerBiasAdjustment:
         
         # Do a forward pass
         batch = tiny_dataset[:2]
-        input_ids = torch.tensor(batch["input_ids"])
+        device = next(model.parameters()).device
+        input_ids = torch.tensor(batch["input_ids"], device=device)
         
         with torch.no_grad():
             outputs = model(input_ids)
@@ -1874,7 +1883,6 @@ class TestMoedlTrainerHeatmap:
             logging_steps=1,
             save_steps=100,
             report_to=[],  # No wandb but we'll mock it
-            use_cpu=True,
         )
         
         model = MoedlForCausalLM(moe_model_config)
@@ -1926,7 +1934,6 @@ class TestMoedlTrainerHeatmap:
             logging_steps=1,
             save_steps=100,
             report_to=[],
-            use_cpu=True,
         )
         
         model = MoedlForCausalLM(moe_model_config)
