@@ -24,7 +24,7 @@ from transformers.processing_utils import Unpack
 from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.generic import check_model_inputs
 from .configuration_moedl import MoedlConfig
-
+from .grouped_glu import GroupedGLU
 
 if is_flash_attn_available():
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
@@ -155,7 +155,8 @@ class MoeBlk(nn.Module):
         self.n_drop = 0  # total dropped by all experts in previous forward pass
 
         self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
-        self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
+        self.experts = GroupedGLU(config.num_experts, config.hidden_size, config.intermediate_size)
+        # self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
         if self.num_shared_experts > 0:
             self.common = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_shared_experts)])
     
@@ -245,19 +246,20 @@ class MoeBlk(nn.Module):
         expanded_tok_ids_to_sorted = expanded_ids_to_sorted // K # to correspond real token ids
         
         # = expert compute ================
-        expert_out = torch.zeros(T*K, D, device=x.device, dtype=x.dtype) 
-        for eid in range(E):
-            s, e = offs[eid-1] if eid > 0 else 0, offs[eid]
-            # slice the lookup token ids, gather input tokens for current expert, forward through expert
-            expert_out[s:e] = self.experts[eid]( _x[expanded_tok_ids_to_sorted[s:e]] ) # the same as .index_select(sort_ids[s:e], dim=0)
+        expert_out = self.experts(_x[expanded_tok_ids_to_sorted], offs).to(x.dtype) # x.dtype is still fp32, only autocast as Func, expert accumulation in fp32 is good 
+
+        # expert_out = torch.zeros(T*K, D, device=x.device, dtype=x.dtype) 
+        # for eid in range(E):
+        #     s, e = offs[eid-1] if eid > 0 else 0, offs[eid]
+        #     # slice the lookup token ids, gather input tokens for current expert, forward through expert
+        #     expert_out[s:e] = self.experts[eid]( _x[expanded_tok_ids_to_sorted[s:e]] ) # the same as .index_select(sort_ids[s:e], dim=0)
 
         # = combine ================
-        moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype)
+        moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
         # get corresponding weight for token in current permuted order, unsqueeze for broadcasting to d dim later
         permuted_weights = k_weights.view(-1)[expanded_ids_to_sorted].unsqueeze(-1)
 
         expert_out *= permuted_weights 
-
 
         # why we need this granular mapping? because of how scatter add work, 
         # it is element-wise mapping
@@ -731,6 +733,7 @@ class MoedlPreTrainedModel(PreTrainedModel):
         src_dir = Path(__file__).resolve().parent
         shutil.copy2(src_dir / "configuration_moedl.py", save_dir / "configuration_moedl.py")
         shutil.copy2(src_dir / "modeling_moedl.py", save_dir / "modeling_moedl.py")
+        shutil.copy2(src_dir / "grouped_glu.py", save_dir / "grouped_glu.py")
 
 
 # Copied from transformers.models.llama.modeling_llama.LlamaModel with Llama->Moedl
