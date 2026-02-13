@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Chua Vui Seng" }]
 dependencies = [
-  "torch",
+  "torch>=2.10",
   "transformers==4.57.3",
   "datasets",
   "accelerate",
