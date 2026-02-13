@@ -226,44 +226,85 @@ class MoeBlk(nn.Module):
             expert_capacity = int( (T*K/E) * self.capacity_factor )
             assert expert_capacity > 0, "expert_capacity must be positive. capacity_factor too small?"
 
+        assert expert_capacity is None, "Temporarily disable expert capacity to focus on grouped gemm optimization. Will re-enable in future."
+        
+        # = dispatch ================
+        # k_ids [T, K] contextually token to k-activated expert ids
+        expanded_k_ids = k_ids.view(-1) # k-expanded for ease of understanding, it is flat too
+        
+        # torch.sort returns sorted values and indices to original positions
+        sorted_expanded_ids, expanded_ids_to_sorted = torch.sort(expanded_k_ids, stable=True)
+
+        # count number of tokens for each expert, 
+        ntok = torch.bincount(sorted_expanded_ids, minlength=self.num_experts)
+        
+        # compute offsets to slice permuted token tensor
+        offs = ntok.cumsum(dim=0).to(torch.int32)
+
+        # dispatch token ids for look up (gather)
+        expanded_tok_ids_to_sorted = expanded_ids_to_sorted // K # to correspond real token ids
+        
+        # = expert compute ================
+        expert_out = torch.zeros(T*K, D, device=x.device, dtype=x.dtype) 
+        for eid in range(E):
+            s, e = offs[eid-1] if eid > 0 else 0, offs[eid]
+            # slice the lookup token ids, gather input tokens for current expert, forward through expert
+            expert_out[s:e] = self.experts[eid]( _x[expanded_tok_ids_to_sorted[s:e]] ) # the same as .index_select(sort_ids[s:e], dim=0)
+
+        # = combine ================
+        moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype)
+        # get corresponding weight for token in current permuted order, unsqueeze for broadcasting to d dim later
+        permuted_weights = k_weights.view(-1)[expanded_ids_to_sorted].unsqueeze(-1)
+
+        expert_out *= permuted_weights 
+
+
+        # why we need this granular mapping? because of how scatter add work, 
+        # it is element-wise mapping
+        expanded_indices = expanded_tok_ids_to_sorted.unsqueeze(-1).expand(-1, D)
+        # expanded_indices [T*K, D] 
+        # scatter_add_(dim, index, src) 
+        # dim=0, meaning moe_outputs[expanded_indices[i]][j] += expert_out[i, j]
+        # expanded_indices has duplicated token ids, accumulation happens
+        moe_outputs.scatter_add_(0, expanded_indices, expert_out)
+
         # == Expert Computation and Accumulation ==
         # initialize output buffer, per token, output dimension
         # accumulate directly for every k slot.
         # accumulation save buffer space.
-        moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
 
         # loop over experts
-        for eid in range(E):
-            # tok_ids: indices of tokens to be attended by expert eid 
-            # which_k: for each token, which k slot it is from 0 to K 
-            tok_ids, which_k = torch.where(k_ids == eid)
+        # for eid in range(E):
+        #     # tok_ids: indices of tokens to be attended by expert eid 
+        #     # which_k: for each token, which k slot it is from 0 to K 
+        #     tok_ids, which_k = torch.where(k_ids == eid)
 
-            if expert_capacity and tok_ids.numel() > expert_capacity:
-                # = Dropping path ===
-                # sorted=False is critical for order preservation
-                if self.lb_gamma > 0.0:
-                    _, keep_i = torch.topk(biased_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
-                else:
-                    _, keep_i = torch.topk(router_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+        #     if expert_capacity and tok_ids.numel() > expert_capacity:
+        #         # = Dropping path ===
+        #         # sorted=False is critical for order preservation
+        #         if self.lb_gamma > 0.0:
+        #             _, keep_i = torch.topk(biased_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
+        #         else:
+        #             _, keep_i = torch.topk(router_scores[tok_ids, which_k], k=expert_capacity, largest=True, sorted=False)
                 
-                keep_tok_ids = tok_ids[keep_i]
-                keep_which_k = which_k[keep_i]
+        #         keep_tok_ids = tok_ids[keep_i]
+        #         keep_which_k = which_k[keep_i]
 
-                expert = self.experts[eid]
-                tokens = _x[keep_tok_ids]
-                weights = k_weights[keep_tok_ids, keep_which_k].unsqueeze(-1)
+        #         expert = self.experts[eid]
+        #         tokens = _x[keep_tok_ids]
+        #         weights = k_weights[keep_tok_ids, keep_which_k].unsqueeze(-1)
 
-                moe_outputs[keep_tok_ids, :] += expert(tokens) * weights 
+        #         moe_outputs[keep_tok_ids, :] += expert(tokens) * weights 
 
-                self.n_drop += int(tok_ids.numel() - expert_capacity)
-            else:
-                # = Dropless path ===
-                # current gather tokens, extract corresponding weights
-                expert = self.experts[eid]
-                tokens = _x[tok_ids]
-                weights = k_weights[tok_ids, which_k].unsqueeze(-1) 
-                # forward pass, output accumulate back to moe_outputs
-                moe_outputs[tok_ids, :] += expert(tokens) * weights
+        #         self.n_drop += int(tok_ids.numel() - expert_capacity)
+        #     else:
+        #         # = Dropless path ===
+        #         # current gather tokens, extract corresponding weights
+        #         expert = self.experts[eid]
+        #         tokens = _x[tok_ids]
+        #         weights = k_weights[tok_ids, which_k].unsqueeze(-1) 
+        #         # forward pass, output accumulate back to moe_outputs
+        #         moe_outputs[tok_ids, :] += expert(tokens) * weights
 
         # loop over shared experts
         for sid in range(self.num_shared_experts):
