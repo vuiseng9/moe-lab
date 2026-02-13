@@ -79,6 +79,7 @@ def grouped_matmul_kernel(
     transA: tl.constexpr,
     transB: tl.constexpr,
     IO_DTYPE: tl.constexpr,
+    BLOCK_DIVISIBLE: tl.constexpr,
     NUM_SM: tl.constexpr,
     # tile sizes
     BLOCK_SIZE_M: tl.constexpr,
@@ -116,55 +117,87 @@ def grouped_matmul_kernel(
             offs_am = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
             offs_bn = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
             offs_k = tl.arange(0, BLOCK_SIZE_K)
-            # a_ptrs are pointer grid of [am, ak] regardless
-            # transA is achieved by reading the right address 
+
+            # Load contiguous tiles in original layout, 
+            # and transpose in registers if needed.
             if transA:
-                # 1 row of base address strided by column, then broadcast + add column wise element 
-                a_ptrs = a_ptr + offs_k[None, :] * lda + offs_am[:, None]
+                # A is (K, M) row-major.
+                a_ptrs = a_ptr + offs_k[:, None] * lda + offs_am[None, :]
             else:
-                # 1 column of base address strided by row, then broadcast + add row wise element 
+                # A is (M, K) row-major.
                 a_ptrs = a_ptr + offs_am[:, None] * lda + offs_k[None, :]
-            # b_ptrs are pointer grid of [bk, bn] regardless
-            # transB is achieved by reading the right address 
+
             if transB:
-                b_ptrs = b_ptr + offs_bn[None, :] * ldb + offs_k[:, None]
+                # B is (N, K) row-major.
+                b_ptrs = b_ptr + offs_bn[:, None] * ldb + offs_k[None, :]
             else:
+                # B is (K, N) row-major.
                 b_ptrs = b_ptr + offs_k[:, None] * ldb + offs_bn[None, :]
 
-            mask_am = offs_am < m
-            mask_bn = offs_bn < n
+            if not BLOCK_DIVISIBLE:
+                mask_am = offs_am < m
+                mask_bn = offs_bn < n
 
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
             for kk in range(0, tl.cdiv(k, BLOCK_SIZE_K)):
-                # hint to Triton compiler to do proper loop pipelining
-                tl.multiple_of(a_ptrs, [16, 16])
-                tl.multiple_of(b_ptrs, [16, 16])
-                # assume full tile for now
-                # need to mask out the out-of-bound
-                abs_k = offs_k + kk * BLOCK_SIZE_K
-
-                amk_mask = (abs_k[None, :] < k) & mask_am[:, None]
-                a = tl.load(a_ptrs, mask=amk_mask, other=0.0)
-                
-                bkn_mask = (abs_k[:, None] < k) & mask_bn[None, :]
-                b = tl.load(b_ptrs, mask=bkn_mask, other=0.0)
-                accumulator += tl.dot(a, b)
                 if transA:
-                    a_ptrs += BLOCK_SIZE_K * lda
+                    # a_ptrs is [BLOCK_K, BLOCK_M] contiguous layout
+                    tl.multiple_of(a_ptrs, [16, 16])
+                    if BLOCK_DIVISIBLE:
+                        a_raw = tl.load(a_ptrs)
+                    else:
+                        abs_k = offs_k + kk * BLOCK_SIZE_K
+                        a_mask = (abs_k[:, None] < k) & (mask_am[None, :])
+                        a_raw = tl.load(a_ptrs, mask=a_mask, other=0.0)
+                    a = tl.trans(a_raw)  # [BLOCK_M, BLOCK_K]
                 else:
-                    a_ptrs += BLOCK_SIZE_K
+                    tl.multiple_of(a_ptrs, [16, 16])
+                    if BLOCK_DIVISIBLE:
+                        a = tl.load(a_ptrs)
+                    else:
+                        abs_k = offs_k + kk * BLOCK_SIZE_K
+                        a_mask = (mask_am[:, None]) & (abs_k[None, :] < k)
+                        a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+
                 if transB:
-                    b_ptrs += BLOCK_SIZE_K
+                    tl.multiple_of(b_ptrs, [16, 16])
+                    if BLOCK_DIVISIBLE:
+                        b_raw = tl.load(b_ptrs)
+                    else:
+                        abs_k = offs_k + kk * BLOCK_SIZE_K
+                        b_mask = (mask_bn[:, None]) & (abs_k[None, :] < k)
+                        b_raw = tl.load(b_ptrs, mask=b_mask, other=0.0)
+                    b = tl.trans(b_raw)  # [BLOCK_K, BLOCK_N]
                 else:
-                    b_ptrs += BLOCK_SIZE_K * ldb
+                    tl.multiple_of(b_ptrs, [16, 16])
+                    if BLOCK_DIVISIBLE:
+                        b = tl.load(b_ptrs)
+                    else:
+                        abs_k = offs_k + kk * BLOCK_SIZE_K
+                        b_mask = (abs_k[:, None] < k) & (mask_bn[None, :])
+                        b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+
+                accumulator += tl.dot(a, b)
+
+                # advance ptrs along K
+                if transA:
+                    a_ptrs += BLOCK_SIZE_K * lda   # next rows in (K,M)
+                else:
+                    a_ptrs += BLOCK_SIZE_K         # next cols in (M,K)
+                if transB:
+                    b_ptrs += BLOCK_SIZE_K          # next cols in (N,K)
+                else:
+                    b_ptrs += BLOCK_SIZE_K * ldb    # next rows in (K,N)
             c = accumulator.to(IO_DTYPE)
 
             offs_cm = tile_m_idx * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
             offs_cn = tile_n_idx * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
             c_ptrs = c_ptr + ldc * offs_cm[:, None] + offs_cn[None, :]
 
-            # assumes full tile for now
-            tl.store(c_ptrs, c, mask=mask_am[:, None] & mask_bn[None, :])
+            if BLOCK_DIVISIBLE:
+                tl.store(c_ptrs, c)
+            else:
+                tl.store(c_ptrs, c, mask=mask_am[:, None] & mask_bn[None, :])
 
             # go to the next tile by advancing NUM_SM
             tile_idx += NUM_SM
@@ -224,6 +257,17 @@ def group_gemm_fn(group_A, group_B, transA=False, transB=False):
     d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=dev)
     # we use a fixed number of CTA, and it's auto-tunable
     grid = lambda META: (META['NUM_SM'], )
+    # check if all M, N, K are divisible by max possible block size to enable fast path
+    # (autotuner picks block sizes, so we check against the largest ones in configs)
+    max_block_m = max(c.kwargs.get('BLOCK_SIZE_M', 1) for c in grouped_matmul_kernel.configs)
+    max_block_n = max(c.kwargs.get('BLOCK_SIZE_N', 1) for c in grouped_matmul_kernel.configs)
+    max_block_k = max(c.kwargs.get('BLOCK_SIZE_K', 1) for c in grouped_matmul_kernel.configs)
+    block_divisible = all(
+        g_sizes[i*3] % max_block_m == 0 and
+        g_sizes[i*3+1] % max_block_n == 0 and
+        g_sizes[i*3+2] % max_block_k == 0
+        for i in range(group_size)
+    )
     grouped_matmul_kernel[grid](
         d_a_ptrs,
         d_b_ptrs,
@@ -233,7 +277,8 @@ def group_gemm_fn(group_A, group_B, transA=False, transB=False):
         group_size,
         transA,
         transB,
-        io_dtype
+        io_dtype,
+        block_divisible,
     )
 
     return group_C

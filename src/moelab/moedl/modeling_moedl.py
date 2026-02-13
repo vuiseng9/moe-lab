@@ -149,6 +149,9 @@ class GLUExperts(nn.ModuleList):
         super().__init__([MoedlMLP(config) for _ in range(config.num_experts)])
         self.num_experts = config.num_experts
     
+    # NOTE: dynamic property to always reflect the current weights in experts, 
+    # instead of snapshot during init. that can be silent errors that
+    # cause long debug.
     @property
     def Wgate_list(self):
         return [expert.gate.weight for expert in self]
