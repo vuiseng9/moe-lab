@@ -11,6 +11,7 @@
 * Token Dropping is pretty much irrelevant with proper load balancing. So [Don't!](#limiting-expert-capacity-to-drop-tokens-or-not-dont)
 * [Scaling #Experts](#scaling-number-of-experts-e): Well ablated in literature while we run into anomaly which requires further investigation.
 * [Description](#scope-and-implementation) of `Moedl` and `MoedlTrainer`
+* Implementing Autograded Grouped GEMM and [Speedup](#efficient-experts-with-autograded-grouped-gemm) 
 * [Future Plans](#future-plans)
 
 ##
@@ -49,7 +50,7 @@ While some features are still work in progress and certain ablations require lar
     * **More customization**: use [`moelab_main.py`][main] like we use standard HF script. Do `python moelab_main.py --help` to see options.
     * **Find LR**: Appending `--sweep_lr <list of comma-limited lr>` to `moelab_main.py` will turn it into learning rate sweep for small number of steps, which can be configured with `--sweep_lr_steps <num_steps>`. For experiments in the [`Makefile`][mkfile], just append sweep_lr=1 to the make command. e.g. `make c1_moedl_e8_k1 sweep_lr=1`. A report will be generated in the output folder and metrics of the sweep are also logged to wandb by default.
 
-* All runs are shared via [W&B project][wbproj], with [CSV export][csv] for quick result lookup.
+* All runs are shared via [W&B project][wbproj] ([w/ grouped_mm][wbproj2]), with [CSV export][csv] for quick result lookup.
 
 * Qualitative Eval per [TinyStories][ts-paper].
     ```bash
@@ -97,6 +98,28 @@ The interplay between these configurables is [here](./src/moelab/moedl/configura
 #### [`MoedlTrainer`][MoedlTrainer]
 
 We subclass the HF `Trainer` to add MoE-specific training callbacks for bookkeeping and logging, including routing statistics, expert load tracking, and fine-grained expert load heatmap generation with GIF collation. A key component is the `LoadBalanceBiasController`, responsible for router biasing control (Eq.3) in load balancing; encourage to review the [code][MoedlTrainer].
+
+#### Efficient Experts with Autograded Grouped GEMM
+
+As of Jan 2026, most HuggingFace-based MoE implementations (including our initial impl.) still iterate over experts and execute them sequentially. This leads to poor GPU utilization: when token count per expert is small or expert dimensions do not saturate tensor cores, serialized expert execution leaves significant compute idle.
+
+Grouped GEMM addresses this by tiling the output of all experts such that these output tiles are scheduled/executed independently and in parallel (with their corresponding inputs). This enables concurrent execution across SMs instead of waiting for one expert to finish before launching the next. Historically this required [custom kernels][triton_grouped_mm]. In PyTorch 2.10 released Jan 2026, [`torch.nn.functional.grouped_mm`][torch210_grouped_mm] provides an official primitive.
+
+To enable training, we implemented an autograded `GroupedMMFunc` and `GroupedGLU` module to wrap around `grouped_mm`. See [codes][grouped_glu_py]. While the integration is straightforward, a few practical notes are worth highlighting:
+
+1. Partial coverage of expert GEMMs. Synonymous to linear layer, experts requires [3 grouped GEMMs][three-gemms] `Y, grad_x, grad_w`. The current `grouped_mm` API assumes a fixed contraction (inner) dimension across groups. This allows us to implement the `y` and `grad_x` GEMMs via appropriate transpose, but not `grad_y` because the contraction dim is the token dim, and token counts per expert vary dynamically. As a result, `grad_y` are still computed per expert in a loop. In essense, we accelerate 2/3 expert GEMMs.
+
+2. The execution pattern of `GroupedGLU`: Using `grouped_mm`, gate, up and down projections are grouped and dispatched in parallel across all activated experts. This replaces the vanilla expert-by-expert execution.
+
+3. Reduced precision: `grouped_mm` returns outputs in the dtype of input A. Under our BF16 training regime, per-expert outputs are BF16. This slightly affects the weighted aggregation over top-k experts due to rounding. Across all experiments, final eval loss degrades by ~0.85% on average, while ablation trends and relative comparisons remain stable.
+
+**Acceleration Results**: Across all experiments, `GroupedGLU` yields:
+* 23% average training (incl. eval) speedup, up to 46% speedup in high-expert settings.
+
+The benefit is strongly correlated to expert count. The more experts you have, the more wasteful sequential execution becomes, so grouped execution helps more.
+
+![](assets/grouped_vs_looped_mm.png)
+
 
 ##
 ### Load Balancing Strategy 
@@ -200,6 +223,7 @@ Contrary to most ablations in the literature (e.g., Fig. 1 in [Switch Transforme
 3. **Proportional Data Scaling**: Simply throw more data at it and move out of the TinyStories regime. This is conceptually straightforward, but deviates from our original goal of small-scale ablations.
 
 *We will revisit this once we improve the underlying kernel efficiency. At the moment, MoE layers are implemented by naively looping over experts (the standard HF approach). We plan to integrate a more efficient grouped GEMM implementation.*
+*26'Feb 14: Grouped gemm integrated. More experiments to follow.*
 
 ##
 ### MoE Resolution & Expert Granularity
@@ -215,7 +239,9 @@ The effectiveness of higher resolution can be reasoned about combinatorially. Fo
 | `c3_moedl_e32_k4`     | 512       | 32:4             | 35,960                 | **1.0581**|
 | `c4_moedl_e64_k8`     | 256       | 64:8             | 4,426,165,368          | 1.0584    |
 
-We ablate MoE models at a fixed sparsity ratio of 12.5% while increasing resolution: E:K = 8:1, 16:2, 32:4, and 64:8. Total model parameters are kept approximately constant at 400M by adjusting the expert hidden size. The benefit of higher resolution is clearly observed empirically: as resolution increases, model performance improves. However, the gains eventually saturate, we attribute the diminishing returns to under-training of smaller experts or data starvation. Our observed trends are consistent with prior results reported in [DeepSeekMoE's Table 1][ds-moe] and [OLMoE ablations (Fig. 5)][olmoe].
+We ablate MoE models at a fixed sparsity ratio of 12.5% while increasing resolution: E:K = 8:1, 16:2, 32:4, and 64:8. Total model parameters are kept approximately constant at 400M by adjusting the expert hidden size. Activated param count stays constant as well. 
+
+The benefit of higher resolution is clearly observed empirically: as resolution increases, model performance improves. However, the gains eventually saturate, we attribute the diminishing returns to under-training of smaller experts or data starvation. Our observed trends are consistent with prior results reported in [DeepSeekMoE's Table 1][ds-moe] and [OLMoE ablations (Fig. 5)][olmoe].
 
 ##
 ### Are Shared Experts Mandatory?
@@ -271,11 +297,11 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 
 #### Future Plans
 
-1. Grouped GEMM kernel integration for more efficient training and larger-scale ablations.
+1. Grouped GEMM kernel integration for more efficient training and larger-scale ablations. (done Autograded Grouped Gemm around Mid Feb 2026.)
 2. Revisit scaling number of experts ablations to understand the anomaly we observed.
 
 ```
-@software{chua_moe_lab_2026,
+@misc{chua_moe_lab_2026,
   author       = {Vui Seng Chua},
   title        = {moe-lab: Rigorous MoE Design Ablations You Can Run at Home},
   year         = {2026},
@@ -296,6 +322,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [hf-moedl-dense]: https://huggingface.co/vuiseng9/01_moedl_dense-0119
 
 [wbproj]: https://wandb.ai/vchua/moe-lab-2026-0119
+[wbproj2]: https://wandb.ai/vchua/moe-lab-2026-0213
 [ts-ds]: https://huggingface.co/roneneldan/TinyStories-33M
 
 [megablocks]: http://arxiv.org/abs/2211.15841
@@ -313,4 +340,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [ts-paper]: http://arxiv.org/abs/2305.07759
 [nv-upcycle]: http://arxiv.org/abs/2410.07524
 [dc-illa]:http://arxiv.org/abs/2305.16264
-
+[torch210_grouped_mm]: https://docs.pytorch.org/docs/2.10/generated/torch.nn.functional.grouped_mm.html
+[triton_grouped_mm]: https://pytorch.org/blog/accelerating-moes-with-a-triton-persistent-cache-aware-grouped-gemm-kernel/
+[grouped_glu_py]: ./src/moelab/moedl/grouped_glu.py
+[three-gemms]: https://github.com/vuiseng9/fp4-training?tab=readme-ov-file#the-three-gemms-of-training
