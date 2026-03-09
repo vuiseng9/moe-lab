@@ -192,6 +192,7 @@ At first glance, all three strategies converge to similar final eval loss, with 
 
 At this point, router biasing edges out the imbalance penalty (lower eval loss, tighter distribution variance), but not convincingly so. The *take-my-money* moment comes next: by examining distribution at granular level, i.e. per-expert, per-layer load deviations from balance point. We visualized them as heatmaps animated over training.
 
+#### Why Router Load Biasing Wins
 ![](assets/compare_lb_strategy_heatmaps.gif)
 
 Examining the animated heatmaps, the advantage of router biasing becomes strikingly clear. Notice how  plain and less hot the color distribution remains throughout training. Router biasing rapidly achieves near-perfect uniform balance across experts and layers, with minimal deviation over time. In contrast, the imbalance penalty shows signs of expert collapse at the later stages of training, where certain experts (L7E6, L1E7, L6E1) remain consistently overloaded while others are underutilized. As expected, the no-load-balancing baseline exhibits imbalance hotspots across layers throughout training.
