@@ -113,7 +113,7 @@ To enable training, we implemented an autograded `GroupedMMFunc` and `GroupedGLU
 
 3. Reduced precision: `grouped_mm` returns outputs in the dtype of input A. Under our BF16 training regime, per-expert outputs are BF16. This slightly affects the weighted aggregation over top-k experts due to rounding. Across all experiments, final eval loss degrades by ~0.85% on average, while ablation trends and relative comparisons remain stable.
 
-**Acceleration Results**: Across all experiments, `GroupedGLU` yields:
+**Acceleration Results on 1xRTX Pro 6000**: Across all experiments, `GroupedGLU` yields:
 * 23% average training (incl. eval) speedup, up to 46% speedup in high-expert settings.
 
 The benefit is strongly correlated to expert count. The more experts you have, the more wasteful sequential execution becomes, so grouped execution helps more.
