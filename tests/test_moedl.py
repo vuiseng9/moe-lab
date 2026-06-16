@@ -596,11 +596,11 @@ class TestMoedlMoeOlmoeEquivalence:
         # Router weights
         moedl_moe.router.weight.data.copy_(olmoe_moe.gate.weight.data)
         
-        # Expert weights: Olmoe nn.Linear stores (out, in), GroupedGLU stores (n_group, in, out)
+        # Expert weights: both Olmoe nn.Linear and GroupedGLU store (out, in) per expert
         for i in range(tiny_moe_config["num_experts"]):
-            moedl_moe.experts.weight_gate.data[i].copy_(olmoe_moe.experts[i].gate_proj.weight.data.T)
-            moedl_moe.experts.weight_up.data[i].copy_(olmoe_moe.experts[i].up_proj.weight.data.T)
-            moedl_moe.experts.weight_down.data[i].copy_(olmoe_moe.experts[i].down_proj.weight.data.T)
+            moedl_moe.experts.weight_gate.data[i].copy_(olmoe_moe.experts[i].gate_proj.weight.data)
+            moedl_moe.experts.weight_up.data[i].copy_(olmoe_moe.experts[i].up_proj.weight.data)
+            moedl_moe.experts.weight_down.data[i].copy_(olmoe_moe.experts[i].down_proj.weight.data)
         
         # Set to eval mode
         moedl_moe.eval()
@@ -661,11 +661,11 @@ class TestMoedlMoeOlmoeEquivalence:
         # Copy weights from Olmoe to Moedl
         # Router weights
         moedl_moe.router.weight.data.copy_(olmoe_moe.gate.weight.data)
-        # Expert weights: Olmoe nn.Linear stores (out, in), GroupedGLU stores (n_group, in, out)
+        # Expert weights: both Olmoe nn.Linear and GroupedGLU store (out, in) per expert
         for i in range(tiny_moe_config["num_experts"]):
-            moedl_moe.experts.weight_gate.data[i].copy_(olmoe_moe.experts[i].gate_proj.weight.data.T)
-            moedl_moe.experts.weight_up.data[i].copy_(olmoe_moe.experts[i].up_proj.weight.data.T)
-            moedl_moe.experts.weight_down.data[i].copy_(olmoe_moe.experts[i].down_proj.weight.data.T)
+            moedl_moe.experts.weight_gate.data[i].copy_(olmoe_moe.experts[i].gate_proj.weight.data)
+            moedl_moe.experts.weight_up.data[i].copy_(olmoe_moe.experts[i].up_proj.weight.data)
+            moedl_moe.experts.weight_down.data[i].copy_(olmoe_moe.experts[i].down_proj.weight.data)
         
         # Set to train mode
         moedl_moe.train()
@@ -737,25 +737,25 @@ class TestMoedlMoeOlmoeEquivalence:
         )
         
         # Check expert gradients match for all experts
-        # GroupedGLU stores weights as (n_group, in, out), nn.Linear as (out, in)
+        # GroupedGLU stores weights as (n_group, out, in), matching nn.Linear's (out, in)
         for i in range(tiny_moe_config["num_experts"]):
             torch.testing.assert_close(
                 moedl_moe.experts.weight_gate.grad[i],
-                olmoe_moe.experts[i].gate_proj.weight.grad.T,
+                olmoe_moe.experts[i].gate_proj.weight.grad,
                 rtol=1e-4,
                 atol=1e-5,
                 msg=f"Expert {i} gate gradients should match"
             )
             torch.testing.assert_close(
                 moedl_moe.experts.weight_up.grad[i],
-                olmoe_moe.experts[i].up_proj.weight.grad.T,
+                olmoe_moe.experts[i].up_proj.weight.grad,
                 rtol=1e-4,
                 atol=1e-5,
                 msg=f"Expert {i} up gradients should match"
             )
             torch.testing.assert_close(
                 moedl_moe.experts.weight_down.grad[i],
-                olmoe_moe.experts[i].down_proj.weight.grad.T,
+                olmoe_moe.experts[i].down_proj.weight.grad,
                 rtol=1e-4,
                 atol=1e-5,
                 msg=f"Expert {i} down gradients should match"
@@ -1470,11 +1470,11 @@ class TestMoedlMoeDeepSeekV3Equivalence:
         # Copy router weights
         moedl_moe.router.weight.data.copy_(ds_moe.gate.weight.data)
         
-        # Copy routed expert weights: nn.Linear stores (out, in), GroupedGLU stores (n_group, in, out)
+        # Copy routed expert weights: both nn.Linear and GroupedGLU store (out, in) per expert
         for i in range(tiny_moe_config_nogrouping["num_experts"]):
-            moedl_moe.experts.weight_gate.data[i].copy_(ds_moe.experts[i].gate_proj.weight.data.T)
-            moedl_moe.experts.weight_up.data[i].copy_(ds_moe.experts[i].up_proj.weight.data.T)
-            moedl_moe.experts.weight_down.data[i].copy_(ds_moe.experts[i].down_proj.weight.data.T)
+            moedl_moe.experts.weight_gate.data[i].copy_(ds_moe.experts[i].gate_proj.weight.data)
+            moedl_moe.experts.weight_up.data[i].copy_(ds_moe.experts[i].up_proj.weight.data)
+            moedl_moe.experts.weight_down.data[i].copy_(ds_moe.experts[i].down_proj.weight.data)
         
         # Copy shared expert weights
         # DeepSeek V3: single large MLP (intermediate = moe_intermediate_size * n_shared_experts)
