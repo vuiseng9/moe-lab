@@ -58,26 +58,33 @@ run-tests: gpulist-check-busy
 gen-tinystories:
 	CUDA_VISIBLE_DEVICES=$(gpulist) neoclm-eval-ts -R $(ckpt)
 
-# ───────────────────────────────────────────────────────────────────────────────
-# Common Pretraining Target: Moedl for TinyStories
-# ───────────────────────────────────────────────────────────────────────────────
-__pretrain-tinystories: ep ?= 2
-__pretrain-tinystories: gpulist-check-busy
+___pretrain___:
 	mkdir -p $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) && \
 	WANDB_PROJECT=$(WANDB_PROJECT) \
 	CUDA_VISIBLE_DEVICES=$(gpulist) python moelab_main.py \
 		$(model_cfg) \
-		--dataset_name roneneldan/TinyStories --block_size 512 \
+		$(dataset_args) \
 		--learning_rate $(lr) --num_train_epochs $(ep) \
 		--do_train --do_eval \
-		--per_device_train_batch_size 128 \
-		--per_device_eval_batch_size 128 \
+		--per_device_train_batch_size $(train_bs) \
+		--per_device_eval_batch_size $(eval_bs) \
 		--eval_steps 500 \
 		--save_steps 2000 \
 		--logging_steps 5 \
 		--run_name $(runlabel) \
 		--output_dir $(OUTROOT)/$(WANDB_PROJECT)/$(runlabel) \
 		$(extra_args)
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Common Pretraining Target: Moedl for TinyStories
+# ───────────────────────────────────────────────────────────────────────────────
+__pretrain-tinystories: gpulist-check-busy
+	$(MAKE) ___pretrain___ ep=2 train_bs=128 eval_bs=128 \
+		dataset_args="--dataset_name roneneldan/TinyStories --block_size 512"
+
+__pretrain-fineweb-edu: gpulist-check-busy dl-fineweb-subset
+	$(MAKE) ___pretrain___ ep=1 train_bs=128 eval_bs=128 \
+		dataset_args="--dataset_name raw_data/fineweb-edu-100b-shuffle --validation_split_percentage 1 --max_eval_samples 10000 --block_size 512"
 
 _llama2-ts:
 	$(MAKE) __pretrain-tinystories \
@@ -119,20 +126,27 @@ a2_moedl_lb_biasing:
 # Scaling Number of Experts
 # ───────────────────────────────────────────────────────────────────────────────
 _ablate-num-experts:
-	$(MAKE) __pretrain-tinystories \
+	$(MAKE) $(pretrain_cmd) \
 	model_cfg="--model_type moedl \
 		--config_overrides lb_coeff=0.0,lb_gamma=0.01,num_experts=$(E),num_active_experts=1,intermediate_size=2048,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 b1_moedl_e2_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=2 lr=8e-4
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-tinystories runlabel=$@-$(postfix) E=2 lr=8e-4
 b2_moedl_e4_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=4 lr=8e-4
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-tinystories runlabel=$@-$(postfix) E=4 lr=8e-4
 b3_moedl_e8_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=8 lr=8e-4
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-tinystories runlabel=$@-$(postfix) E=8 lr=8e-4
 b4_moedl_e16_k1:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=16 lr=8e-4
-b20_moedl_e4_k1_4ep:
-	$(MAKE) _ablate-num-experts runlabel=$@-$(postfix) E=4 lr=8e-4 ep=4
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-tinystories runlabel=$@-$(postfix) E=16 lr=8e-4
+
+b1_moedl_e2_k1_fineweb:
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-fineweb-edu runlabel=$@-$(postfix) E=2 lr=8e-4
+b2_moedl_e4_k1_fineweb:
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-fineweb-edu runlabel=$@-$(postfix) E=4 lr=8e-4
+b3_moedl_e8_k1_fineweb:
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-fineweb-edu runlabel=$@-$(postfix) E=8 lr=8e-4
+b4_moedl_e16_k1_fineweb:
+	$(MAKE) _ablate-num-experts pretrain_cmd=__pretrain-fineweb-edu runlabel=$@-$(postfix) E=16 lr=8e-4
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Ablating MoE Resolution (a.k.a. expert granularity)
@@ -216,3 +230,15 @@ split_3:
 	$(MAKE) e2_moedl_cf_1.5
 	$(MAKE) e3_moedl_cf_2.0
 	$(MAKE) e4_moedl_cf_2.5
+
+dl-fineweb-subset:
+	mkdir -p ./raw_data/fineweb-edu-100b-shuffle
+	@if [ -n "$$(ls -A ./raw_data/fineweb-edu-100b-shuffle 2>/dev/null)" ]; then \
+		echo "[Info] raw_data/fineweb-edu-100b-shuffle already populated, skipping download."; \
+	else \
+		hf download karpathy/fineweb-edu-100b-shuffle \
+			--repo-type dataset \
+			--include "shard_000[0-2][0-9].parquet" \
+			--local-dir ./raw_data/fineweb-edu-100b-shuffle; \
+	fi
+
