@@ -11,7 +11,7 @@ class GroupedMMFunc(torch.autograd.Function):
     NOTE: F.grouped_mm does support autograd, but incompatible with torch.compile.
     Custom implementation this way is compatible with torch.compile.
     Using x, w, y instead of a, b, c for clarity mapping to expert linear layer.
-    w is assumed to be in (n_group, oc, ic) shape, not oc by ic, therefore
+    w is assumed to be in (n_group, oc, ic) shape, not ic by oc, therefore
     gemm 1 y      = dot(x, w.transpose(-2, -1))
     gemm 2 grad_x = dot(grad_y, w)
     gemm 3 grad_w = dot(grad_y.transpose(0, 1), x)
