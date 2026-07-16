@@ -184,3 +184,33 @@ e3_moedl_cf_2.0:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=2.0 lr=8e-4
 e4_moedl_cf_2.5:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=2.5 lr=8e-4
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Run the Ablations, each split for one gpu is recommended.
+# ───────────────────────────────────────────────────────────────────────────────
+split1:
+	$(MAKE) a0_moedl_no_lb
+	$(MAKE) a2_moedl_lb_biasing
+	$(MAKE) b2_moedl_e4_k1
+	$(MAKE) b3_moedl_e8_k1
+	$(MAKE) c3_moedl_e32_k4
+
+split2:
+	$(MAKE) a1_moedl_lb_penalty
+	$(MAKE) c4_moedl_e64_k8
+	$(MAKE) d1_moedl_s0_k4_e32
+	$(MAKE) d2_moedl_s1_k3_e31
+
+split3:
+	$(MAKE) b1_moedl_e2_k1
+	$(MAKE) c1_moedl_e8_k1
+	$(MAKE) c2_moedl_e16_k2
+	$(MAKE) d3_moedl_s2_k2_e30
+	$(MAKE) e1_moedl_cf_1.0
+
+split4:
+	$(MAKE) b4_moedl_e16_k1
+	$(MAKE) d4_moedl_s3_k1_e29
+	$(MAKE) e2_moedl_cf_1.5
+	$(MAKE) e3_moedl_cf_2.0
+	$(MAKE) e4_moedl_cf_2.5
