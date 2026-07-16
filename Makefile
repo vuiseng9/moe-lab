@@ -1,10 +1,10 @@
 
-
-WANDB_PROJECT ?= moe-lab
-OUTROOT ?= /root/work/run
+COMMITID ?= $(shell git rev-parse --short=4 HEAD)
+WANDB_PROJECT ?= moe-lab-$(COMMITID)
+OUTROOT ?= $(HOME)/work/run
 gpulist ?= 0
 extra_args ?=
-postfix ?= r0
+postfix ?= $(shell date +%m%d)
 ckpt ?= roneneldan/TinyStories-33M
 
 # Design:
