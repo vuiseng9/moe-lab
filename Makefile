@@ -92,7 +92,7 @@ _llama2-ts:
 		--config_overrides hidden_size=768,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
 _moedl-dense-ts:
-	$(MAKE) __pretrain-tinystories \
+	$(MAKE) $(pretrain_cmd) \
 	model_cfg="--model_type moedl \
 		--config_overrides num_experts=1,num_active_experts=1,hidden_size=768,num_hidden_layers=8,num_attention_heads=16,num_key_value_heads=16,intermediate_size=2048 \
 		--tokenizer_name meta-llama/Llama-2-7b-hf"
@@ -104,7 +104,10 @@ _moedl-dense-ts:
 	$(MAKE) _llama2-ts runlabel=$@-$(postfix) lr=8e-4 
 
 01_moedl_dense:
-	$(MAKE) _moedl-dense-ts runlabel=$@-$(postfix) lr=8e-4
+	$(MAKE) _moedl-dense-ts pretrain_cmd=__pretrain-tinystories runlabel=$@-$(postfix) lr=8e-4
+
+01_moedl_dense_fineweb:
+	$(MAKE) _moedl-dense-ts pretrain_cmd=__pretrain-fineweb-edu runlabel=$@-$(postfix) lr=8e-4
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Load Balancing Ablations 
