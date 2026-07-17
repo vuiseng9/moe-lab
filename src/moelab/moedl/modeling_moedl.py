@@ -670,7 +670,7 @@ class MoedlDecoderLayer(GradientCheckpointingLayer):
         if self.num_experts > 1:
             self.moe = MoeBlk(config)
         else:
-            self.mlp = MoedlMLP(config)
+            self.mlp = MoeBlk(config)
 
     @deprecate_kwarg("past_key_value", new_name="past_key_values", version="4.58")
     def forward(
@@ -706,7 +706,7 @@ class MoedlDecoderLayer(GradientCheckpointingLayer):
         if self.num_experts > 1:
             hidden_states, router_logits = self.moe(hidden_states)
         else:
-            hidden_states = self.mlp(hidden_states)
+            hidden_states, _ = self.mlp(hidden_states)
 
         hidden_states = residual + hidden_states
 
