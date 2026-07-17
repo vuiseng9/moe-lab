@@ -1,6 +1,6 @@
 
 COMMITID ?= $(shell git rev-parse --short=4 HEAD)
-WANDB_PROJECT ?= moe-lab-$(COMMITID)
+WANDB_PROJECT ?= moe-lab-fineweb
 OUTROOT ?= $(HOME)/work/run
 gpulist ?= 0
 extra_args ?=
