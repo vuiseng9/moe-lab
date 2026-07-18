@@ -186,33 +186,38 @@ e4_moedl_cf_2.5:
 	$(MAKE) _ablate-token-drop runlabel=$@-$(postfix) CF=2.5 lr=8e-4
 
 # ───────────────────────────────────────────────────────────────────────────────
-# Run the Ablations, each split on respective gpu is recommended.
+# Run the Ablations, each split on a separate gpu is recommended.
 # ───────────────────────────────────────────────────────────────────────────────
 # use gpulist to set target gpu.
 # e.g. make split_2 gpulist=2
+# Note:
+# 	* comment out b3_moedl_e8_k1, c1_moedl_e8_k1, 
+# 	  then they are essentially the same as a2_moedl_lb_biasing
+#	* runtime was extracted from previous runs on 1x rtx pro 6000.
 split_0:
-	$(MAKE) a0_moedl_no_lb      
-	$(MAKE) a2_moedl_lb_biasing
-	$(MAKE) b2_moedl_e4_k1
-	$(MAKE) b3_moedl_e8_k1
-	$(MAKE) c3_moedl_e32_k4
-
+	$(MAKE) 01_moedl_dense          # 1.87 h
+	$(MAKE) a0_moedl_no_lb          # 2.18 h
+	$(MAKE) b4_moedl_e16_k1         # 2.23 h
+	$(MAKE) e2_moedl_cf_1.5         # 2.23 h
+	$(MAKE) e4_moedl_cf_2.5         # 2.23 h
+	
 split_1:
-	$(MAKE) a1_moedl_lb_penalty
-	$(MAKE) c4_moedl_e64_k8
-	$(MAKE) d1_moedl_s0_k4_e32
-	$(MAKE) d2_moedl_s1_k3_e31
+	$(MAKE) a1_moedl_lb_penalty     # 2.17 h
+	$(MAKE) a2_moedl_lb_biasing     # 2.15 h
+	$(MAKE) b1_moedl_e2_k1          # 2.07 h
+	$(MAKE) b2_moedl_e4_k1          # 2.10 h
+	$(MAKE) c2_moedl_e16_k2         # 2.24 h
 
 split_2:
-	$(MAKE) b1_moedl_e2_k1
-	$(MAKE) c1_moedl_e8_k1
-	$(MAKE) c2_moedl_e16_k2
-	$(MAKE) d3_moedl_s2_k2_e30
-	$(MAKE) e1_moedl_cf_1.0
+	$(MAKE) c3_moedl_e32_k4         # 2.46 h
+	$(MAKE) d1_moedl_s0_k4_e32      # 2.47 h
+	$(MAKE) d2_moedl_s1_k3_e31      # 2.43 h
+	$(MAKE) d3_moedl_s2_k2_e30      # 2.36 h
+# 	$(MAKE) b3_moedl_e8_k1          # 2.15 h
 
 split_3:
-	$(MAKE) b4_moedl_e16_k1
-	$(MAKE) d4_moedl_s3_k1_e29
-	$(MAKE) e2_moedl_cf_1.5
-	$(MAKE) e3_moedl_cf_2.0
-	$(MAKE) e4_moedl_cf_2.5
+	$(MAKE) c4_moedl_e64_k8         # 3.05 h
+	$(MAKE) d4_moedl_s3_k1_e29      # 2.29 h
+	$(MAKE) e1_moedl_cf_1.0         # 2.24 h
+	$(MAKE) e3_moedl_cf_2.0         # 2.24 h
+# 	$(MAKE) c1_moedl_e8_k1          # 2.15 h
