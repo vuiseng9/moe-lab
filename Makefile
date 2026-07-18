@@ -106,7 +106,7 @@ _moedl-dense-ts:
 01_moedl_dense:
 	$(MAKE) _moedl-dense-ts pretrain_cmd=__pretrain-tinystories runlabel=$@-$(postfix) lr=8e-4
 
-01_moedl_dense_fineweb:
+01_moedl_dense_fineweb_ggemm:
 	$(MAKE) _moedl-dense-ts pretrain_cmd=__pretrain-fineweb-edu runlabel=$@-$(postfix) lr=8e-4
 
 # ───────────────────────────────────────────────────────────────────────────────
