@@ -50,7 +50,7 @@ While some features are still work in progress and certain ablations require lar
     * **More customization**: use [`moelab_main.py`][main] like we use standard HF script. Do `python moelab_main.py --help` to see options.
     * **Find LR**: Appending `--sweep_lr <list of comma-limited lr>` to `moelab_main.py` will turn it into learning rate sweep for small number of steps, which can be configured with `--sweep_lr_steps <num_steps>`. For experiments in the [`Makefile`][mkfile], just append sweep_lr=1 to the make command. e.g. `make c1_moedl_e8_k1 sweep_lr=1`. A report will be generated in the output folder and metrics of the sweep are also logged to wandb by default.
 
-* All runs are shared via [W&B project][wbproj] ([w/ grouped_mm][wbproj2]), with [CSV export][csv] for quick result lookup.
+* All runs are shared via [W&B project][wbproj-0716], [spreadsheet][result-xlsx] for quick result lookup.
 
 * Qualitative Eval per [TinyStories][ts-paper].
     ```bash
@@ -105,18 +105,13 @@ As of Jan 2026, most HuggingFace-based MoE implementations (including our initia
 
 Grouped GEMM addresses this by tiling the output of all experts such that these output tiles are scheduled/executed independently and in parallel (with their corresponding inputs). This enables concurrent execution across SMs instead of waiting for one expert to finish before launching the next. Historically this required [custom kernels][triton_grouped_mm]. In PyTorch 2.10 released Jan 2026, [`torch.nn.functional.grouped_mm`][torch210_grouped_mm] provides an official primitive.
 
-To enable training, we implemented an autograded `GroupedMMFunc` and `GroupedGLU` module to wrap around `grouped_mm`. See [codes][grouped_glu_py]. While the integration is straightforward, a few practical notes are worth highlighting:
+To enable training, we implemented an autograded `GroupedMMFunc` and `GroupedGLU` module to wrap around `grouped_mm`. While the integration is straightforward, the grouped weights must use the layout of `(group size, oc, ic)` so that the 3 grouped gemms in forward and backward map directly to `grouped_mm`. See [codes][grouped_glu_py].
 
-1. Partial coverage of expert GEMMs. Synonymous to linear layer, experts requires [3 grouped GEMMs][three-gemms] `Y, grad_x, grad_w`. The current `grouped_mm` API assumes a fixed contraction (inner) dimension across groups. This allows us to implement the `y` and `grad_x` GEMMs via appropriate transpose, but not `grad_y` because the contraction dim is the token dim, and token counts per expert vary dynamically. As a result, `grad_y` are still computed per expert in a loop. In essense, we accelerate 2/3 expert GEMMs.
-
-2. The execution pattern of `GroupedGLU`: Using `grouped_mm`, gate, up and down projections are grouped and dispatched in parallel across all activated experts. This replaces the vanilla expert-by-expert execution.
-
-3. Reduced precision: `grouped_mm` returns outputs in the dtype of input A. Under our BF16 training regime, per-expert outputs are BF16. This slightly affects the weighted aggregation over top-k experts due to rounding. Across all experiments, final eval loss degrades by ~0.85% on average, while ablation trends and relative comparisons remain stable.
 
 **Acceleration Results on 1xRTX Pro 6000**: Across all experiments, `GroupedGLU` yields:
-* 23% average training (incl. eval) speedup, up to 46% speedup in high-expert settings.
+* 31% average training (incl. eval) speedup, up to 60% speedup in high-expert settings.
 
-The benefit is strongly correlated to expert count. The more experts you have, the more wasteful sequential execution becomes, so grouped execution helps more.
+The benefit is strongly correlated to expert count. The more experts you have, the more wasteful sequential execution becomes, so grouped execution helps more. *Note: `torch.compile (Inductor backend)` introduces small numerical differences in the `GroupedGLU` backward, resulting in a modest eval-loss regression (~0.98% on average). Run this [script][dbg-groupedglu-mlp] to understand the rootcause.*
 
 ![](assets/grouped_vs_looped_mm.png)
 
@@ -172,17 +167,17 @@ Setup: We ablate on `Moedl` with 8 experts (E=8) and 1 active expert per token (
 
 | make [exp. id]               | Eval Loss |
 |---------------------------   |:---------:|
-| `a0_moedl_no_lb`             | 1.127     |
-| `a1_moedl_lb_penalty`        | 1.137     |
-| `a2_moedl_lb_biasing`        | 1.130     |
+| `a0_moedl_no_lb`             | 1.110     |
+| `a1_moedl_lb_penalty`        | 1.133     |
+| `a2_moedl_lb_biasing`        | 1.143     |
 
-At first glance, all three strategies converge to similar final eval loss, with the best result achieved without load balancing, followed closely by router biasing, and finally the imbalance penalty. While the final loss differences are small, the load-balancing dynamics differ. To illustrate this, we examine expert load over time. The following plots, logged in [W&B][wbproj], show expert load averaged across layers.
+At first glance, all three strategies converge to similar final eval loss, with the best result achieved without load balancing, followed closely by router biasing, and finally the imbalance penalty. While the final loss differences are small, the load-balancing dynamics differ. To illustrate this, we examine expert load over time. The following plots, logged in [W&B][wbproj-0716], show expert load averaged across layers.
 
-**Without load balancing**, expert imbalance is immediately apparent. A small subset of experts dominates the routing, as reflected by the disproportionate heights in the stacked plot and the uneven distributions in the % overlay view. Observe how `e002` and `e006` are less assigned than the rest throughout training.
+**Without load balancing**, expert imbalance is immediately apparent. A small subset of experts dominates the routing, as reflected by the disproportionate heights in the stacked plot and the uneven distributions in the % overlay view. Observe how `e001` and `e005` are less assigned than the rest throughout training.
 
 <img src="assets/a0_no_lb_expert_load.png" width="600" style="height:auto;">
 
-**Imbalance penalty** improves load distribution gradually over training. All series fluctuate around balance point 1/E=0.125 throughout. Between steps 2k and 10k, the % plot exhibit noticeably higher variance, indicating noisy and unstable routing before the auxiliary loss sufficiently regularizes expert utilization.
+**Imbalance penalty** improves load distribution gradually over training. All series fluctuate around balance point 1/E=0.125 throughout. 10k step and prior, the % plot exhibit noticeably higher variance, indicating noisy and unstable routing before the auxiliary loss sufficiently regularizes expert utilization.
 
 <img src="assets/a1_lb_penalty_expert_load.png" width="600" style="height:auto;">
 
@@ -235,10 +230,10 @@ The effectiveness of higher resolution can be reasoned about combinatorially. Fo
 
 | make [exp. id]        |Expert Dff | Resolution (E:K) | Combinations ($_EC_k$) | Eval Loss |
 |-----------------------|:---------:|:----------------:| ----------------------:|:---------:|
-| `c1_moedl_e8_k1`      | 2048      | 8:1              | 8                      | 1.1296    |
-| `c2_moedl_e16_k2`     | 1024      | 16:2             | 120                    | 1.0658    |
-| `c3_moedl_e32_k4`     | 512       | 32:4             | 35,960                 | **1.0581**|
-| `c4_moedl_e64_k8`     | 256       | 64:8             | 4,426,165,368          | 1.0584    |
+| `c1_moedl_e8_k1`      | 2048      | 8:1              | 8                      | 1.1411    |
+| `c2_moedl_e16_k2`     | 1024      | 16:2             | 120                    | 1.0793    |
+| `c3_moedl_e32_k4`     | 512       | 32:4             | 35,960                 | 1.0744    |
+| `c4_moedl_e64_k8`     | 256       | 64:8             | 4,426,165,368          | **1.0709**|
 
 We ablate MoE models at a fixed sparsity ratio of 12.5% while increasing resolution: E:K = 8:1, 16:2, 32:4, and 64:8. Total model parameters are kept approximately constant at 400M by adjusting the expert hidden size. Activated param count stays constant as well. 
 
@@ -251,18 +246,18 @@ In addition to finer-grained experts, [DeepSeekMoE][ds-moe] also advocates the u
 
 While this intuition is appealing, [OLMoE (4.1.3)][olmoe] highlights a potential confound to the combinatorial argument. Shared experts are essentially fixed routing paths and contribute no additional combinations. At iso-active-expert settings, introducing shared experts effectively reduces the number of unique combinations, which may be counter-productive for model expressivity (see Table below).
 
-Empirical results in the literature are mixed. The proposer [DeepSeekMoE (Fig.3,6)][ds-moe] reports benefits from shared experts whereas [OLMoE (4.1.3)][olmoe] observes limited or negative impact. [NVIDIA's ablations][nv-upcycle] show similar convergence behavior with and without shared experts, though in the specific context of upcycling a Nemotron-4 dense model into an MoE. Notably, most prior studies explore shared experts in a binary on/off setting.
+Empirical results in the literature are mixed. The proposer [DeepSeekMoE (Fig.3,6)][ds-moe] reports benefits from shared experts whereas [OLMoE (4.1.3)][olmoe] observes limited or negative impact. [NVIDIA's ablations][nv-upcycle] show similar convergence behavior with and without shared experts, though it was a specific context of upcycling a Nemotron-4 dense model into an MoE. Notably, most prior studies explore shared experts in a binary on/off setting due to computational demands for large model ablations.
 
 Given the lightweight nature of our setup, we are able to explore this design axis more thoroughly by varying the number of shared experts while holding number of active experts and total parameters constant. Our baseline is E=32, K=4, ~400M total parameters with ~135M actived. We vary the number of shared experts (ES) from 0 to 3, adjusting the K and E to maintain a total of 4 active experts.
 
-| make [exp. id]             | Shared (ES) | E  | K | Active Experts | Combinations ($_EC_k$) | Eval Loss |
-|----------------------------|:-----------:|---:|--:|:--------------:|-----------------------:|:---------:|
-| `d1_moedl_s0_k4_e32-0119`  | 0           | 32 | 4 | 4              | 35,960                 | 1.0581    |
-| `d2_moedl_s1_k3_e31-0119`  | 1           | 31 | 3 | 4              | 4,495                  | **1.0573**|
-| `d3_moedl_s2_k2_e30-0119`  | 2           | 30 | 2 | 4              | 435                    | 1.0600    |
-| `d4_moedl_s3_k1_e29-0119`  | 3           | 29 | 1 | 4              | 29                     | 1.1014    |
+| make [exp. id]        | Shared (ES) | E  | K | Active Experts | Combinations ($_EC_k$) | Eval Loss |
+|-----------------------|:-----------:|---:|--:|:--------------:|-----------------------:|:---------:|
+| `d1_moedl_s0_k4_e32`  | 0           | 32 | 4 | 4              | 35,960                 | **1.0727**|
+| `d2_moedl_s1_k3_e31`  | 1           | 31 | 3 | 4              | 4,495                  | 1.0769    |
+| `d3_moedl_s2_k2_e30`  | 2           | 30 | 2 | 4              | 435                    | 1.0741    |
+| `d4_moedl_s3_k1_e29`  | 3           | 29 | 1 | 4              | 29                     | 1.1096    |
 
-**Results:** The overall trend suggests that more shared experts lead to worse performance aligning to the combinatorial argument. Yet the best result is achieved with 1 shared expert (ES=1) by just tiny margin (0.0008) over no shared experts (ES=0). This small gain may be attributed to dataset characteristics such as limited scale or diversity in TinyStories, leading to under-training of non-shared experts.
+**Results:** The best result is achieved with no shared experts (ES=0). The overall trend suggests that more shared experts lead to worse performance aligning to the combinatorial argument. 
 
 **Personal take:** In my view, the benefit of shared experts, if any, appears marginal. Rather than allocating capacity to shared experts, I would prefer to expand the main trunk by widening layers or adding depth to **preserve** symmetry within MoE blocks. Conceptually, these approaches serve a similar purpose, applying a common transformation to every token.
 
@@ -279,17 +274,22 @@ Concretely, the **capacity factor (CF)** controls this limit:
 
 In plain terms, CF = 1.0 restricts each expert to the average expected token load under perfectly balanced routing. Increasing CF allows experts to handle more tokens beyond this average. For example, CF = 2.0 permits each expert to process up to 2x the average load, reducing the likelihood of token dropping during imbalance routing.
 
-Following the vein of [MegaBlocks][megablocks], we ablate the effect of token dropping on Moedl with resolution E:K = 8:1 by sweeping the capacity factor (CF) from 1.0 to 2.5 in increments of 0.5. Note that our setup differs in load balancing: we use router biasing, whereas MegaBlocks uses an auxiliary load-balancing objective. Run `make e1 .. e4` for the CF sweeps, and refer `a2` / `b3` for the dropless setting (CF disabled).
+Following the vein of [MegaBlocks][megablocks], we ablate the effect of token dropping on Moedl with resolution E:K = 8:1 by sweeping the capacity factor (CF) from 1.0 to 2.5 in increments of 0.5. Note that our setup differs in load balancing: we use router biasing, whereas MegaBlocks uses an auxiliary load-balancing objective. Run `make e1 .. e4` for the CF sweeps.
 
-<img src="assets/cf_ablations.png" width="400" style="height:auto;">
+| make [exp. id]   | Eval Loss  |  CF | Final-Step Tokens Dropped |
+|:-----------------|-----------:|----:|--------------------------:|
+| e1_moedl_cf_1.0  |     1.1384 | 1.0 |                      7542 |
+| e2_moedl_cf_1.5  |     1.1362 | 1.5 |                         0 |
+| e3_moedl_cf_2.0  | **1.1337** | 2.0 |                         0 |
+| e4_moedl_cf_2.5  |     1.1349 | 2.5 |                         0 |
 
 <img src="assets/cf_drop_token_count_over_time.png" width="400" style="height:auto;">
 
-**Dropping tokens is detrimental.** The dropless setting (CF disabled) outperforms all CF configurations. Among the CF runs, the highest CF (2.5) which minimizes token dropping performs best, consistent with the idea that fewer dropped tokens leads to better learning.
+**Dropping tokens is detrimental.**  Consistent with the literature, fewer dropped tokens leads to better learning. 
 
-To make this concrete, we enclose the total number of dropped tokens over training. With CF=1.0, the model continues to drop tokens throughout training, ending at ~6K+ dropped tokens aggregated across layers (roughly ~1% of all tokens). In contrast, CF=1.5/2.0/2.5 quickly converge to near-zero dropped tokens. This also suggests router biasing already routes tokens effectively, experts do not hit extra expert capacity (higher CF).
+To make this concrete, we enclose the total number of dropped tokens over training. With CF=1.0, the model continues to drop tokens throughout training, ending at ~7K+ total dropped tokens across layers (roughly ~1% of all tokens). In contrast, CF=1.5/2.0/2.5 quickly converge to near-zero dropped tokens. This suggests that router biasing distributes tokens effectively enough that the additional expert capacity at higher CF values is rarely needed. With CF=1.0, however, even small residual load imbalances can overflow the tightly constrained expert capacity.
 
-A little nuance though, CF=1.5 and CF=2.0 converge slightly worse than CF=1.0. We suspect this is variance, or that early-stage token dropping can have lasting impact on model learning. Regardless, the trend is clear: **token dropping is not beneficial.** Also crucially, router biasing effectively mitigates expert overload, making capacity-based token dropping unnecessary. *So, don't drop tokens!*
+A little nuance though, CF=1.5 and CF=2.5 converge slightly worse than CF=2.0. We suspect this is variance, or that early-stage token dropping can have lasting impact on model learning. Regardless, the trend is clear: **token dropping is not beneficial.** Also crucially, router biasing effectively mitigates expert overload, making capacity-based token dropping unnecessary. *So, don't drop tokens!*
 
 ##
 ### Conclusion
@@ -298,8 +298,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 
 #### Future Plans
 
-1. Grouped GEMM kernel integration for more efficient training and larger-scale ablations. (done Autograded Grouped Gemm around Mid Feb 2026.)
-2. Revisit scaling number of experts ablations to understand the anomaly we observed.
+1. Revisit scaling number of experts ablations to understand the anomaly we observed.
 
 ```
 @misc{chua_moe_lab_2026,
@@ -318,12 +317,12 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [MoedlTrainer]: ./src/moelab/moedl/trainer.py
 [main]: ./moelab_main.py
 [large-hp]: ./assets/compare_lb_strategy_heatmaps.gif
-[csv]: ./assets/results.csv
+[result-xlsx]: ./assets/moe-lab-results.xlsx
 [hf-moedl]: https://huggingface.co/vuiseng9/c3_moedl_e32_k4-0119
 [hf-moedl-dense]: https://huggingface.co/vuiseng9/01_moedl_dense-0119
 
-[wbproj]: https://wandb.ai/vchua/moe-lab-2026-0119
-[wbproj2]: https://wandb.ai/vchua/moe-lab-2026-0213
+[wbproj-0119]: https://wandb.ai/vchua/moe-lab-2026-0119
+[wbproj-0716]: https://wandb.ai/vchua/moe-lab-2026-0716
 [ts-ds]: https://huggingface.co/roneneldan/TinyStories-33M
 
 [megablocks]: http://arxiv.org/abs/2211.15841
@@ -345,3 +344,4 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [triton_grouped_mm]: https://pytorch.org/blog/accelerating-moes-with-a-triton-persistent-cache-aware-grouped-gemm-kernel/
 [grouped_glu_py]: ./src/moelab/moedl/grouped_glu.py
 [three-gemms]: https://github.com/vuiseng9/fp4-training?tab=readme-ov-file#the-three-gemms-of-training
+[dbg-groupedglu-mlp]: ./assets/debug_equivalence_grouped_glu_vs_mlp.py
