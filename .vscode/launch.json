@@ -1,0 +1,61 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "vs-attach",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": { "host": "127.0.0.1", "port": 5678 },
+            "justMyCode": false,
+            "subProcess": false
+        },
+        {
+            "name": "c2_moedl_e16_k2",
+            "type": "debugpy",
+            "request": "launch",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "cwd": "${workspaceFolder}",
+            "program": "moelab_main.py",
+            "args": [
+                "--model_type", "moedl",
+                "--config_overrides", "latent_factor=3,lb_gamma=0.01,num_experts=16,num_active_experts=2,intermediate_size=1024,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16",
+                // "--config_overrides", "lb_gamma=0.01,num_experts=16,num_active_experts=2,intermediate_size=1024,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16",
+                "--tokenizer_name", "meta-llama/Llama-2-7b-hf",
+                "--dataset_name", "roneneldan/TinyStories",
+                "--block_size", "512",
+                "--learning_rate", "8e-4",
+                "--num_train_epochs", "2",
+                "--do_train",
+                "--do_eval",
+                "--per_device_train_batch_size", "32",
+                "--per_device_eval_batch_size", "32",
+                "--eval_steps", "10",
+                "--save_steps", "2000",
+                "--logging_steps", "5",
+                "--run_name", "dev-c2_moedl_e16_k2",
+                "--output_dir", "/tmp/c2_moedl_e16_k2-0717",
+                "--no_torch_compile"
+            ]
+        },
+        {
+            "name": "vs-pytest",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "-s",  // capture print()/logging output
+                //" --maxfail=1",
+                "test_*.py::test_name"
+            ],
+            "justMyCode": false
+        }
+    ]
+}

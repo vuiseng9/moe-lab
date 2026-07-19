@@ -153,10 +153,29 @@ class MoeBlk(nn.Module):
         self.lb_gamma = config.lb_gamma
         self.capacity_factor = config.capacity_factor
         self.n_drop = 0  # total dropped by all experts in previous forward pass
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+        self.latent_factor = config.latent_factor
 
         self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
-        self.experts = GroupedGLU(config.num_experts, config.hidden_size, config.intermediate_size)
-        # self.experts = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_experts)])
+
+        if not isinstance(self.latent_factor, int) or self.latent_factor < 1:
+            raise ValueError(f"latent_factor must be an integer greater than or equal to 1. Got {self.latent_factor}.")
+        
+        if self.latent_factor > 1:
+            assert config.hidden_size % self.latent_factor == 0, "hidden_size must be divisible by latent_factor."
+            self.expert_dim = config.hidden_size // self.latent_factor
+
+            self.latent_down = nn.Linear( self.hidden_size, self.expert_dim,  bias=False)
+            self.experts     = GroupedGLU(self.num_experts, self.expert_dim,  self.intermediate_size)
+            self.latent_up   = nn.Linear( self.expert_dim,  self.hidden_size, bias=False)
+        else:
+            self.expert_dim = config.hidden_size
+            
+            self.latent_down = nn.Identity()
+            self.experts     = GroupedGLU(self.num_experts, self.expert_dim, self.intermediate_size)
+            self.latent_up   = nn.Identity()
+
         if self.num_shared_experts > 0:
             self.common = nn.ModuleList([MoedlMLP(config) for _ in range(self.num_shared_experts)])
     
@@ -172,10 +191,11 @@ class MoeBlk(nn.Module):
         E  = self.num_experts
         ES = self.num_shared_experts
         CF = self.capacity_factor
-        return f"[K:E|ES] = {K}:{E}|{ES}, " \
+        return f"\t[K:E|ES] = {K}:{E}|{ES}, " \
                f"sparsity: {(K+ES)/(E+ES)*100:.2f}% (K+ES)/(E+ES),\n" \
-               f"lb_coeff={self.lb_coeff}, lb_gamma={self.lb_gamma},\n" \
-               f"capacity_factor={CF}"
+               f"\thidden_size={self.hidden_size} // latent_factor={self.latent_factor} => expert_dim={self.expert_dim},\n" \
+               f"\tlb_coeff={self.lb_coeff}, lb_gamma={self.lb_gamma},\n" \
+               f"\tcf={CF}"
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         x = hidden_states
@@ -262,21 +282,25 @@ class MoeBlk(nn.Module):
             expanded_tok_ids = torch.cat(tok_ids_by_e)
             expanded_which_k = torch.cat(which_k_by_e)
 
+            # LatentMoE down-projection or identity mapping depending on latent_factor
+            # followed by expert-major input for the experts
+            moe_inputs = self.latent_down(_x)[expanded_tok_ids]
+
             # = expert compute ================
-            expert_out = self.experts(_x[expanded_tok_ids], offs).to(x.dtype)
+            expert_out = self.experts(moe_inputs, offs).to(x.dtype)
 
             # = combine ================
-            moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
+            moe_outputs = torch.zeros(T, self.expert_dim, device=x.device, dtype=x.dtype) 
             # get corresponding weight for token in current permuted order, unsqueeze for broadcasting to d dim later
             permuted_weights = k_weights[expanded_tok_ids, expanded_which_k].unsqueeze(-1)
 
             expert_out *= permuted_weights 
 
-            expanded_indices = expanded_tok_ids.unsqueeze(-1).expand(-1, D)
+            expanded_indices = expanded_tok_ids.unsqueeze(-1).expand(-1, self.expert_dim)
 
             moe_outputs.scatter_add_(0, expanded_indices, expert_out)
 
-        else:
+        else: # dropless routine
             # = dispatch ================
             # k_ids [T, K] contextually token to k-activated expert ids
             expanded_k_ids = k_ids.view(-1) # k-expanded for ease of understanding, it is flat too
@@ -293,8 +317,12 @@ class MoeBlk(nn.Module):
             # dispatch token ids for look up (gather)
             expanded_tok_ids_to_sorted = expanded_ids_to_sorted // K # to correspond real token ids
             
+            # LatentMoE down-projection or identity mapping depending on latent_factor
+            # followed by expert-major input for the experts
+            moe_inputs = self.latent_down(_x)[expanded_tok_ids_to_sorted]
+            
             # = expert compute ================
-            expert_out = self.experts(_x[expanded_tok_ids_to_sorted], offs).to(x.dtype) # x.dtype is still fp32, only autocast as Func, expert accumulation in fp32 is good 
+            expert_out = self.experts(moe_inputs, offs).to(x.dtype) # x.dtype is still fp32, only autocast as Func, expert accumulation in fp32 is good 
 
             # expert_out = torch.zeros(T*K, D, device=x.device, dtype=x.dtype) 
             # for eid in range(E):
@@ -303,7 +331,7 @@ class MoeBlk(nn.Module):
             #     expert_out[s:e] = self.experts[eid]( _x[expanded_tok_ids_to_sorted[s:e]] ) # the same as .index_select(sort_ids[s:e], dim=0)
 
             # = combine ================
-            moe_outputs = torch.zeros(T, D, device=x.device, dtype=x.dtype) 
+            moe_outputs = torch.zeros(T, self.expert_dim, device=x.device, dtype=x.dtype) 
             # get corresponding weight for token in current permuted order, unsqueeze for broadcasting to d dim later
             permuted_weights = k_weights.view(-1)[expanded_ids_to_sorted].unsqueeze(-1)
 
@@ -311,12 +339,15 @@ class MoeBlk(nn.Module):
 
             # why we need this granular mapping? because of how scatter add work, 
             # it is element-wise mapping
-            expanded_indices = expanded_tok_ids_to_sorted.unsqueeze(-1).expand(-1, D)
+            expanded_indices = expanded_tok_ids_to_sorted.unsqueeze(-1).expand(-1, self.expert_dim)
             # expanded_indices [T*K, D] 
             # scatter_add_(dim, index, src) 
             # dim=0, meaning moe_outputs[expanded_indices[i]][j] += expert_out[i, j]
             # expanded_indices has duplicated token ids, accumulation happens
             moe_outputs.scatter_add_(0, expanded_indices, expert_out)
+
+        # LatentMoE up-projection or identity mapping depending on latent_factor
+        moe_outputs = self.latent_up(moe_outputs)
 
         # = shared experts ================
         # loop over shared experts

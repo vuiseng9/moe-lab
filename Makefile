@@ -221,3 +221,31 @@ split_3:
 	$(MAKE) e1_moedl_cf_1.0         # 2.24 h
 	$(MAKE) e3_moedl_cf_2.0         # 2.24 h
 # 	$(MAKE) c1_moedl_e8_k1          # 2.15 h
+
+# ───────────────────────────────────────────────────────────────────────────────
+# LatentMoE Ablations
+# ───────────────────────────────────────────────────────────────────────────────
+_ablate-latent-moe:
+	$(MAKE) __pretrain-tinystories \
+	model_cfg="--model_type moedl \
+		--config_overrides latent_factor=$(alpha),lb_gamma=0.01,num_experts=$(E),num_active_experts=$(K),intermediate_size=1024,num_hidden_layers=8,hidden_size=768,num_attention_heads=16,num_key_value_heads=16 \
+		--tokenizer_name meta-llama/Llama-2-7b-hf"
+# equivalent c2_moedl_e16_k2
+l1_latentmoe_alpha1_e16_k2:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=1 E=16 K=2 lr=8e-4
+l2_latentmoe_alpha2_e16_k2:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=2 E=16 K=2 lr=8e-4
+l3_latentmoe_alpha3_e16_k2:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=3 E=16 K=2 lr=8e-4
+l4_latentmoe_alpha4_e16_k2:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=4 E=16 K=2 lr=8e-4
+l6_latentmoe_alpha6_e16_k2:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=6 E=16 K=2 lr=8e-4
+
+l3eff_latentmoe_alpha3_e48_k2:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=3 E=48 K=2 lr=8e-4
+l3acc_latentmoe_alpha3_e48_k6:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=3 E=48 K=6 lr=8e-4
+l3bal_latentmoe_alpha3_e16_k6:
+	$(MAKE) _ablate-latent-moe runlabel=$@-$(postfix) alpha=3 E=16 K=6 lr=8e-4
+

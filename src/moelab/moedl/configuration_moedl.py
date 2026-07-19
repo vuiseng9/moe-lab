@@ -39,6 +39,7 @@ class MoedlConfig(PretrainedConfig):
         lb_coeff=0.0,
         lb_gamma=0.0,
         capacity_factor=0.0,
+        latent_factor=1,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -87,6 +88,12 @@ class MoedlConfig(PretrainedConfig):
             self.lb_coeff = lb_coeff
             self.lb_gamma = lb_gamma
             self.capacity_factor = capacity_factor
+
+            # Latent MoE 
+            if not isinstance(latent_factor, int) or latent_factor < 1:
+                raise ValueError("latent_factor must be an integer greater than or equal to 1.")
+            self.latent_factor = latent_factor
+
         else:
             # dense MLP
             # while shared expert semantically closer to dense MLP,

@@ -107,7 +107,6 @@ class MoedlTrainer(MoelabTrainer):
     @torch.no_grad()
     def get_expert_stats(self, router_logits):
         # model wide aggregration per k per e
-
         K = self.cfg.num_active_experts
         E = self.cfg.num_experts
 
