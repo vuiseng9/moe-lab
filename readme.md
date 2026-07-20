@@ -13,6 +13,7 @@
 * [Description](#scope-and-implementation) of `Moedl` and `MoedlTrainer`
 * Implementing Autograded Grouped GEMM and [Speedup](#efficient-experts-with-autograded-grouped-gemm) 
 * [Future Plans](#future-plans)
+* MoE in 2026: LatentMoE for Efficiency, see [pareto plot](#latentmoe-for-Efficiency).
 
 ##
 #### Motivation
@@ -292,6 +293,18 @@ To make this concrete, we enclose the total number of dropped tokens over traini
 A little nuance though, CF=1.5 and CF=2.5 converge slightly worse than CF=2.0. We suspect this is variance, or that early-stage token dropping can have lasting impact on model learning. Regardless, the trend is clear: **token dropping is not beneficial.** Also crucially, router biasing effectively mitigates expert overload, making capacity-based token dropping unnecessary. *So, don't drop tokens!*
 
 ##
+### LatentMoE for Efficiency
+> **Preview**: [LatentMoE][lmoe-paper] is a new optimization in 2026 to achieve a more efficient MoE efficiency in both training and inference, proposed by Nvidia which employs in Nemotron-3 Super/Utra, also getting adopted by Microsoft new MAI, and most recently Kimi K3.
+
+> The goal of this section is to ablate the latent compression, as well as additional technique in scaling up params and activated params, largely following the spirit of the original paper. Following are preview of our results, we reproduce the trend of quality and efficiency trade-off. Detailed write-up coming soon. 
+
+<center><img src="assets/latentmoe_quality_vs_speed.png" width="750" style="height:auto;"></center>
+
+![alt text](assets/latentmoe_table.png)
+
+Logs in [wandb][wbproj-lmoe].
+
+##
 ### Conclusion
 
 Our ablations suggest: Use router biasing for load balancing. Prefer MoE with higher resolution - small experts, more of them, but watch for diminishing returns. Skip shared experts and token dropping.
@@ -323,6 +336,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 
 [wbproj-0119]: https://wandb.ai/vchua/moe-lab-2026-0119
 [wbproj-0716]: https://wandb.ai/vchua/moe-lab-2026-0716
+[wbproj-lmoe]: https://wandb.ai/vchua/LatentMoE-2026-719
 [ts-ds]: https://huggingface.co/roneneldan/TinyStories-33M
 
 [megablocks]: http://arxiv.org/abs/2211.15841
@@ -345,3 +359,4 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [grouped_glu_py]: ./src/moelab/moedl/grouped_glu.py
 [three-gemms]: https://github.com/vuiseng9/fp4-training?tab=readme-ov-file#the-three-gemms-of-training
 [dbg-groupedglu-mlp]: ./assets/debug_equivalence_grouped_glu_vs_mlp.py
+[lmoe-paper]: https://arxiv.org/abs/2601.18089
