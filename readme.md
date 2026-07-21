@@ -1,5 +1,4 @@
 
-
 ## moe-lab: Rigorous MoE Design Ablations you can run at home
 *No Cluster, Single-GPU experiments using [`Moedl`][MoedlImpl], an MoE implementation built on Hugging Face Transformers*
 
@@ -38,15 +37,19 @@ While some features are still work in progress and certain ablations require lar
     * `make <experiment-id>`, see [`Makefile`][mkfile]. Most experiments can fit within a single 80GB GPU. Most took around 3-5 hrs on a RTX Pro 6000 gpu.
         ```bash
         # Available make targets (Experiments)
-        00_llama2_ref        b20_moedl_e4_k1_4ep  e1_moedl_cf_1.0
-        01_moedl_dense       c1_moedl_e8_k1       e2_moedl_cf_1.5
-        a0_moedl_no_lb       c2_moedl_e16_k2      e3_moedl_cf_2.0
-        a1_moedl_lb_penalty  c3_moedl_e32_k4      e4_moedl_cf_2.5
-        a2_moedl_lb_biasing  c4_moedl_e64_k8      gen-tinystories
-        b1_moedl_e2_k1       d1_moedl_s0_k4_e32   gpulist-check-busy
-        b2_moedl_e4_k1       d2_moedl_s1_k3_e31   install-dev-moelab
-        b3_moedl_e8_k1       d3_moedl_s2_k2_e30   install-moelab
-        b4_moedl_e16_k1      d4_moedl_s3_k1_e29   run-tests
+        00_llama2_ref                  c4_moedl_e64_k8                l1_latentmoe_alpha1_e16_k2
+        01_moedl_dense                 d1_moedl_s0_k4_e32             l2_latentmoe_alpha2_e16_k2
+        a0_moedl_no_lb                 d2_moedl_s1_k3_e31             l3_latentmoe_alpha3_e16_k2
+        a1_moedl_lb_penalty            d3_moedl_s2_k2_e30             l3acc_latentmoe_alpha3_e48_k6
+        a2_moedl_lb_biasing            d4_moedl_s3_k1_e29             l3bal_latentmoe_alpha3_e16_k6
+        b1_moedl_e2_k1                 e1_moedl_cf_1.0                l3eff_latentmoe_alpha3_e48_k2
+        b20_moedl_e4_k1_4ep            e2_moedl_cf_1.5                l4_latentmoe_alpha4_e16_k2
+        b2_moedl_e4_k1                 e3_moedl_cf_2.0                l6_latentmoe_alpha6_e16_k2
+        b3_moedl_e8_k1                 e4_moedl_cf_2.5                run-tests
+        b4_moedl_e16_k1                gen-tinystories                split_0
+        c1_moedl_e8_k1                 gpulist-check-busy             split_1
+        c2_moedl_e16_k2                install-dev-moelab             split_2
+        c3_moedl_e32_k4                install-moelab                 split_3
         ``` 
     * **More customization**: use [`moelab_main.py`][main] like we use standard HF script. Do `python moelab_main.py --help` to see options.
     * **Find LR**: Appending `--sweep_lr <list of comma-limited lr>` to `moelab_main.py` will turn it into learning rate sweep for small number of steps, which can be configured with `--sweep_lr_steps <num_steps>`. For experiments in the [`Makefile`][mkfile], just append sweep_lr=1 to the make command. e.g. `make c1_moedl_e8_k1 sweep_lr=1`. A report will be generated in the output folder and metrics of the sweep are also logged to wandb by default.
@@ -294,9 +297,10 @@ A little nuance though, CF=1.5 and CF=2.5 converge slightly worse than CF=2.0. W
 
 ##
 ### LatentMoE for Efficiency
-> **Preview**: [LatentMoE][lmoe-paper] is a new optimization in 2026 to achieve a more efficient MoE efficiency in both training and inference, proposed by Nvidia which employs in Nemotron-3 Super/Utra, also getting adopted by Microsoft new MAI, and most recently Kimi K3.
 
-> The goal of this section is to ablate the latent compression, as well as additional technique in scaling up params and activated params, largely following the spirit of the original paper. Following are preview of our results, we reproduce the trend of quality and efficiency trade-off. Detailed write-up coming soon. 
+[LatentMoE][lmoe-paper] is a new MoE optimization in 2026 to alleviate key training and inference bottlenecks through a small set of model knobs. Originally proposed by Nvidia and employed in their flagship Nemotron 3 [Super][nm3s-page] and [Ultra][nm3u-page], it has since been adopted by Microsoft's [MAI][mai-paper], and Kimi K3. According to the [blog][k3-blog], K3 uses a modified variant called Stable LatentMoE. We will find out exactly what is tweaked when its technical report is released.
+
+The original paper does a great job of characterizing these bottlenecks, supporting the proposed architecture with theoretical analysis, and distilling the findings into 5 principles. Rather than repeat the full treatment, this section explains the core ideas concisely and substantiates them with observations from our ablations. 
 
 <center><img src="assets/latentmoe_quality_vs_speed.png" width="750" style="height:auto;"></center>
 
@@ -304,10 +308,62 @@ A little nuance though, CF=1.5 and CF=2.5 converge slightly worse than CF=2.0. W
 
 Logs in [wandb][wbproj-lmoe].
 
+#### Latent Compression Factor, $\alpha$
+The core idea is simple but effective: insert a token-compression layer before the MoE block and a decompression layer after it, *think of a pair of LoRA projections sandwiching the MoE*. Together, they project each token from model dimension $d$ into a lower-dimensional latent space $l$, such that routing, token communication, and expert computation all operate in the latent dimension. 
+
+This directly alleviates the major bottlenecks of: 
+1. **Memory Bandwidth** in latency-critical (inference decoding)
+
+    Memory bound when arithmetic intensity $I$, $\frac{2 \cdot t_{\text{exp}} \cdot d \cdot m}{d \cdot m + t_{\text{exp}} \cdot (d + m)} < \frac{\text{Peak FLOP/s}}{\text{BW}_{\text{HBM}}}$
+
+    During decoding or low batch scenario, $t_{\text{exp}}$ is so low that its arithmetic intensity is lower than system ridge point and bottlenecked by $BW_{HBM}$. Lowering the denominator,  $d \cdot m + t_{\text{exp}} \cdot (d + m)$ lowers the amount of expert weights and activations that must be moved, directly reducing memory traffic and BW requirement.
+    
+3. **EP All-to-all Volume** in throughput regime (inference prefill and training)
+
+    $M_{\text{comm}} \propto \frac{N}{\text{EP}} \cdot t_{\text{exp}} \cdot d = \frac{t_{\text{total}} \cdot K \cdot d}{\text{EP}}$
+
+    EP dispatch and combine can account for 20–60% of execution time. The cost scales approximately with the communicated payload, $M_{comm}$.
+
+> See the paper for full derivations of the equation.
+
+Because $d$ is a common factor in both bottlenecks, it is natural for LatentMoE to define the compression factor $\alpha = \frac{d}{l}$, where $l$ is the latent dimension. Increasing (\alpha) reduces both memory traffic and EP communication volume approximately proportionally.
+
+Important: While compression does attenuate the bottlenecks, reducing the MoE hidden dimension also changes the parameter count, FLOPs, memory footprint, and compute profile, and may ultimately affect model quality.
+
+#### Sweeping and Selecting $\alpha$
+
+Our baseline is taken from `c2` above, is a standard MoE with $E$=16 experts and $K$=2 activated experts per token. We sweep $\alpha \in {1,2,3,4,6}$, corresponding to latent dimensions $l \in {768,384,256,192,128}$.
+
+The trade-off is clear from the plot: increasing $\alpha$ improves training efficiency, measured by runtime or tokens/sec (see [wandb][wbproj-lmoe]) degrades eval loss. This is expected. As shown in the table, both total and activated parameter counts decrease with stronger compression, reducing modeling capacity.
+
+Note that our setup uses a single GPU or data parallelism only, so EP all-to-all benefit is not reflected. The runtime improvement instead comes from reduced memory reads/writes at the lower latent dimension, together with lower grouped-gemm compute.
+
+To select $\alpha$, we quantify how much runtime reduction is obtained per unit of eval-loss degradation. By this measure, $\alpha=3$ provides the best trade-off.
+
+
+#### Scaling up E & K by $\alpha$ for Model Quality
+
+LatentMoE proposes 2 variants to recover the modeling capacity lost through compression:
+
+1. **Scale the number of experts $E$ by $\alpha$** (blue star)
+
+    Denoted $l\text{-MoE}_{\text{eff}}$ in the paper, this variant increases the number of experts to $E'=\alpha E$. This approximately restores the total parameter count of the standard MoE, as shown in the table. The key argument is that neither memory BW load nor EP comm volume directly scales with (E). We can therefore increase the model capacity and routing expressivity with relatively little impact on execution time.
+
+    The blue star shows a substantial recovery in eval loss. But why does the runtime gain shrink? Our single-gpu setup does not use EP all-to-all, so the main communication benefit is absent. The compression and decompression projections also introduce noticeable overhead at this small model scale, though this should become relatively insignificant in larger models. Even so, the variant remains faster than the baseline while largely recovering model quality. The trade-off metric is almost double, from -8 to -15.6.
+
+2. **Further scale the number of activated experts $K$ by $\alpha$** (pink star)
+
+    Denoted $l\text{-MoE}_{\text{acc}}$ in the paper, this variant additionally increases the number of activated experts to $K'=\alpha K$. $\alpha E$ only restores total parammeters, $\alpha E$ restores the activated parameter count. Because both $\alpha E$ and $\alpha E$ are scaled up proportionally, this has resulted in massive possible expert combinations, pushing modeling capacity and routing expressivity.
+
+    The pink star lives up to its promise on model quality, achieving the lowest eval loss of all config. But why is the runtime cost so high? Again, this is largely the artifact of our single-gpu setup: there is no EP communication benefit to offset the added work, while every token still passes through the compression and decompression projections. Activating 6 out of 48 experts also produces a more fragmented grouped gemm with many smaller expert workloads. The result is improved quality, but at an outsized runtime cost in this small-scale setup.
+
+Overall, our ablations reproduce the model-quality trends reported in the paper, while the performance results are more mixed. This is largely due to scale: our single-gpu setup does not experience the same distributed bottlenecks that LatentMoE is designed to address. Nevertheless, because the primary goal of this repo is to study modeling behavior rather than large-scale system performance, the experiments achieve their intended objective.
+
+
 ##
 ### Conclusion
 
-Our ablations suggest: Use router biasing for load balancing. Prefer MoE with higher resolution - small experts, more of them, but watch for diminishing returns. Skip shared experts and token dropping.
+Our ablations suggest: Use router biasing for load balancing. Prefer MoE with higher resolution - small experts, more of them, but watch for diminishing returns. Skip shared experts and token dropping. Scale according to LatentMoE parameterization for optimal efficiency–accuracy trade-off.
 
 #### Future Plans
 
@@ -360,3 +416,7 @@ Our ablations suggest: Use router biasing for load balancing. Prefer MoE with hi
 [three-gemms]: https://github.com/vuiseng9/fp4-training?tab=readme-ov-file#the-three-gemms-of-training
 [dbg-groupedglu-mlp]: ./assets/debug_equivalence_grouped_glu_vs_mlp.py
 [lmoe-paper]: https://arxiv.org/abs/2601.18089
+[k3-blog]: https://www.kimi.com/blog/kimi-k3
+[mai-paper]: https://microsoft.ai/pdf/mai-thinking-1.pdf
+[nm3s-page]: https://research.nvidia.com/labs/nemotron/Nemotron-3-Super/
+[nm3u-page]: https://research.nvidia.com/labs/nemotron/Nemotron-3-Ultra/
