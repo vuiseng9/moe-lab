@@ -309,7 +309,7 @@ The original paper does a great job of characterizing these bottlenecks, support
 Logs in [wandb][wbproj-lmoe].
 
 #### Latent Compression Factor, $\alpha$
-The core idea is simple but effective: insert a token-compression layer before the MoE block and a decompression layer after it, *think of a pair of LoRA projections sandwiching the MoE*. Together, they project each token from model dimension $d$ into a lower-dimensional latent space $l$, such that routing, token communication, and expert computation all operate in the latent dimension. 
+The core idea is simple but effective: insert a token-compression layer before the MoE block and a decompression layer after it, *think of a pair of LoRA projections sandwiching the MoE, taking in activations (the tokens) instead of model weights*.  The layers project each token from model dimension $d$ into a lower-dimensional latent space $l$, such that routing, token communication, and expert computation all operate in the latent dimension. 
 
 This directly alleviates the major bottlenecks of: 
 1. **Memory Bandwidth** in latency-critical (inference decoding)
