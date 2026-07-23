@@ -9,7 +9,7 @@
 * [Shared Experts?](#are-shared-experts-mandatory) Probably not compelling enough to be worth the effort.
 * Token Dropping is pretty much irrelevant with proper load balancing. So [Don't!](#limiting-expert-capacity-to-drop-tokens-or-not-dont)
 * [Scaling #Experts](#scaling-number-of-experts-e): Well ablated in literature while we run into anomaly which requires further investigation.
-* [Description](#scope-and-implementation) of `Moedl` and `MoedlTrainer`
+* [More](#scope-and-implementation) on `Moedl` and `MoedlTrainer`
 * Implementing Autograded Grouped GEMM and [Speedup](#efficient-experts-with-autograded-grouped-gemm) 
 * [Future Plans](#future-plans)
 * MoE in 2026: LatentMoE for Efficiency, see [pareto plot](#latentmoe-for-Efficiency).
@@ -34,7 +34,7 @@ While some features are still work in progress and certain ablations require lar
 * **Install**: clone and `make install-moelab` or `make install-dev-moelab`
 * **Test**: `make run-tests`
 * **Run**: 
-    * `make <experiment-id>`, see [`Makefile`][mkfile]. Most experiments can fit within a single 80GB GPU. Most took around 3-5 hrs on a RTX Pro 6000 gpu.
+    * `make <experiment-id>`, see [`Makefile`][mkfile]. Most experiments can fit within a single 80GB GPU. Most took less than 3 hrs on a RTX Pro 6000 gpu.
         ```bash
         # Available make targets (Experiments)
         00_llama2_ref                  c4_moedl_e64_k8                l1_latentmoe_alpha1_e16_k2
